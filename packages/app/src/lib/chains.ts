@@ -13,7 +13,7 @@ export const xlayer = defineChain({
 });
 
 export const xlayerTestnet = defineChain({
-  id: 195,
+  id: 1952,
   name: "X Layer Testnet",
   nativeCurrency: { name: "OKB", symbol: "OKB", decimals: 18 },
   rpcUrls: {

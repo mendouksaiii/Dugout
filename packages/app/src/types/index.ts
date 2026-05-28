@@ -15,6 +15,10 @@ export interface Player {
   passing: number;
   defending: number;
   physical: number;
+  /** True for World Cup legends — gets ICON rarity + price premium */
+  legend?: boolean;
+  /** Era a legend played in (e.g. "1974", "2002") — displayed on marketplace */
+  era?: string;
 }
 
 export interface PlayerNFT extends Player {

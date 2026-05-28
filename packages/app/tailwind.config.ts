@@ -29,8 +29,13 @@ const config: Config = {
       },
       fontFamily: {
         display: ["var(--font-bebas)", "sans-serif"],
-        sans: ["var(--font-inter)", "sans-serif"],
+        sans: ["var(--font-sans)", "system-ui", "sans-serif"],
         mono: ["var(--font-jetbrains)", "monospace"],
+      },
+      transitionTimingFunction: {
+        "ease-out-strong": "cubic-bezier(0.23, 1, 0.32, 1)",
+        "ease-in-out-strong": "cubic-bezier(0.77, 0, 0.175, 1)",
+        drawer: "cubic-bezier(0.32, 0.72, 0, 1)",
       },
       backgroundImage: {
         "pitch-gradient":

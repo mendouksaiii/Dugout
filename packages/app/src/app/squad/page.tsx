@@ -1,0 +1,548 @@
+"use client";
+
+import { useMemo, useState, useEffect, useRef } from "react";
+import { consumePitchEntry, playCrowd } from "@/lib/sounds";
+import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import Link from "next/link";
+import { Navbar } from "@/components/layout/Navbar";
+import { PlayerCard } from "@/components/ui/PlayerCard";
+import { ConnectButton } from "@/components/ui/ConnectButton";
+import { Backdrop } from "@/components/ui/Backdrop";
+import { VideoBackdrop } from "@/components/ui/VideoBackdrop";
+import { RelatedLinks } from "@/components/ui/RelatedLinks";
+import { useCountUp } from "@/lib/useCountUp";
+import { FOOTBALL_IMAGERY } from "@/lib/imagery";
+import playersData from "@/data/players.json";
+import { Player, Position } from "@/types";
+import {
+  CONTRACT_ADDRESSES,
+  DUGOUT_NFT_ABI,
+  POSITION_NUM,
+} from "@/lib/contracts";
+
+const players = playersData as Player[];
+const POSITIONS: Position[] = ["GK", "DEF", "MID", "FWD", "FLEX"];
+
+type Slot = { player: Player | null };
+
+export default function SquadBuilderPage() {
+  const { address, isConnected } = useAccount();
+  const [slots, setSlots] = useState<Slot[]>(Array(5).fill({ player: null }));
+  const [filter, setFilter] = useState<Position | "ALL">("ALL");
+  const [search, setSearch] = useState("");
+
+  // If we just navigated in from the portal, ride the crowd cheer
+  useEffect(() => {
+    if (consumePitchEntry()) {
+      playCrowd(4);
+    }
+  }, []);
+
+  const filtered = useMemo(() => {
+    return players.filter((p) => {
+      const matchesPos = filter === "ALL" || p.position === filter;
+      const matchesSearch =
+        search.length === 0 ||
+        p.name.toLowerCase().includes(search.toLowerCase()) ||
+        p.nation.toLowerCase().includes(search.toLowerCase());
+      return matchesPos && matchesSearch;
+    });
+  }, [filter, search]);
+
+  // Already-minted check
+  const { data: hasMinted } = useReadContract({
+    address: CONTRACT_ADDRESSES.dugoutNFT,
+    abi: DUGOUT_NFT_ABI,
+    functionName: "hasMinted",
+    args: address ? [address] : undefined,
+    query: { enabled: !!address },
+  });
+
+  // Squad composition rules
+  const filledCount = slots.filter((s) => s.player !== null).length;
+  const gkCount = slots.filter((s) => s.player?.position === "GK").length;
+  const isReady = filledCount === 5 && gkCount === 1;
+
+  const validationMsg = (() => {
+    if (filledCount < 5) return `${5 - filledCount} more to pick`;
+    if (gkCount === 0) return "Need exactly 1 goalkeeper";
+    if (gkCount > 1) return "Only 1 goalkeeper allowed";
+    return "Ready to mint";
+  })();
+
+  const isInSquad = (id: string) => slots.some((s) => s.player?.id === id);
+
+  // Track which slot was last filled (for one-shot fill animation)
+  const [lastFilledIdx, setLastFilledIdx] = useState<number | null>(null);
+  // Track which player card was just clicked (for flight animation)
+  const [flightId, setFlightId] = useState<string | null>(null);
+
+  function pickPlayer(p: Player) {
+    if (isInSquad(p.id)) {
+      setSlots((prev) => prev.map((s) => (s.player?.id === p.id ? { player: null } : s)));
+      return;
+    }
+    const firstEmpty = slots.findIndex((s) => s.player === null);
+    if (firstEmpty === -1) return;
+    setSlots((prev) => {
+      const next = [...prev];
+      next[firstEmpty] = { player: p };
+      return next;
+    });
+    // Trigger animations
+    setLastFilledIdx(firstEmpty);
+    setFlightId(p.id);
+    setTimeout(() => setLastFilledIdx(null), 700);
+    setTimeout(() => setFlightId(null), 420);
+  }
+
+  function clearSlot(idx: number) {
+    setSlots((prev) => {
+      const next = [...prev];
+      next[idx] = { player: null };
+      return next;
+    });
+  }
+
+  // Smooth-counter for header stats
+  const animFilledCount = useCountUp(filledCount, 350);
+  const avgRating = filledCount === 0
+    ? 0
+    : Math.round(slots.filter((s) => s.player).reduce((a, s) => a + (s.player?.rating ?? 0), 0) / filledCount);
+  const animAvgRating = useCountUp(avgRating, 500);
+
+  // Confetti burst when squad becomes valid
+  const [celebrate, setCelebrate] = useState(false);
+  const wasReady = useRef(false);
+  useEffect(() => {
+    if (isReady && !wasReady.current) {
+      setCelebrate(true);
+      setTimeout(() => setCelebrate(false), 1400);
+    }
+    wasReady.current = isReady;
+  }, [isReady]);
+
+  // ─── Mint transaction ──────────────────────────────────────────────────────
+  const { writeContract, data: hash, isPending: isMinting, error: writeError } =
+    useWriteContract();
+  const { isLoading: isConfirming, isSuccess: isMinted } =
+    useWaitForTransactionReceipt({ hash });
+
+  function handleMint() {
+    if (!isReady || !address) return;
+    const playerIds = slots.map((s) => s.player!.id) as [string, string, string, string, string];
+    const positions = slots.map((s) => POSITION_NUM[s.player!.position]) as [
+      number,
+      number,
+      number,
+      number,
+      number
+    ];
+    writeContract({
+      address: CONTRACT_ADDRESSES.dugoutNFT,
+      abi: DUGOUT_NFT_ABI,
+      functionName: "mintSquad",
+      args: [playerIds, positions],
+    });
+  }
+
+  return (
+    <>
+      <Navbar />
+      <main className="relative min-h-[100dvh] pt-32 sm:pt-36 pb-24 px-4 sm:px-8">
+        {/* Cinematic video backdrop — full page */}
+        <VideoBackdrop
+          src="/videos/squad-bg.mp4"
+          opacity={0.5}
+          blur={2}
+          overlay="hero"
+          blend="luminosity"
+          playbackRate={0.55}
+        />
+        {/* Subtle floodlights to keep brand accent */}
+        <div className="pointer-events-none absolute inset-0 -z-10 floodlight-left" />
+        <div className="pointer-events-none absolute inset-0 -z-10 floodlight-right" />
+        <div className="pointer-events-none absolute inset-0 -z-10 scanlines opacity-30" />
+        <div className="mx-auto max-w-7xl relative">
+          {/* Page header */}
+          <div className="flex flex-wrap items-end justify-between gap-4 mb-10">
+            <div>
+              <div className="inline-flex items-center gap-2 rounded-full bg-white/[0.04] hairline px-3 py-1">
+                <span className="font-mono text-[10px] tracking-[0.22em] text-white/60 uppercase">
+                  Step 01 — Draft
+                </span>
+              </div>
+              <h1 className="mt-4 font-display text-white text-6xl sm:text-7xl leading-[0.9]">
+                Build your <span className="text-dugout-gold">five.</span>
+              </h1>
+              <p className="mt-3 text-white/55 max-w-xl">
+                Pick exactly one goalkeeper and four outfield players. Your squad mints as 5 NFTs
+                you own forever — no re-rolls.
+              </p>
+            </div>
+
+            {/* Validation chip */}
+            <div className="rounded-full p-1 bg-white/[0.04] hairline">
+              <div
+                className={`flex items-center gap-2 rounded-full px-4 py-1.5
+                  ${isReady ? "bg-dugout-electric/15 text-dugout-electric" : "bg-white/5 text-white/70"}`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 rounded-full ${
+                    isReady
+                      ? "bg-dugout-electric shadow-[0_0_8px_rgba(0,255,135,0.8)]"
+                      : "bg-white/40"
+                  }`}
+                />
+                <span className="font-mono text-[11px] tracking-[0.15em] uppercase">
+                  {validationMsg}
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Already minted state */}
+          {isConnected && hasMinted ? (
+            <AlreadyMintedPanel />
+          ) : (
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+              {/* Formation / squad slots — left rail (Asymmetric Bento) */}
+              <div className="lg:col-span-5 lg:sticky lg:top-28 lg:self-start">
+                <div className="rounded-[2rem] p-1.5 bg-white/[0.04] hairline-strong">
+                  <div className="rounded-[calc(2rem-0.375rem)] bg-gradient-to-b from-dugout-pitch/30 via-dugout-surface/60 to-dugout-black hairline inner-glow p-6 relative overflow-hidden">
+                    {/* Pitch lines */}
+                    <div className="pointer-events-none absolute inset-6 rounded-2xl border border-dugout-electric/10" />
+                    <div className="pointer-events-none absolute left-1/2 top-6 bottom-6 w-px bg-dugout-electric/10" />
+
+                    <div className="flex items-center justify-between mb-5">
+                      <div>
+                        <div className="font-mono text-[10px] tracking-[0.22em] text-white/40 uppercase">
+                          Your Squad
+                        </div>
+                        <div className="font-display text-3xl text-white mt-1 tabular-nums">
+                          <span className={isReady ? "text-dugout-electric" : ""}
+                            style={isReady ? { textShadow: "0 0 16px rgba(0,255,135,0.4)" } : undefined}>
+                            {animFilledCount}
+                          </span>
+                          <span className="text-white/30"> / 5</span>
+                        </div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-mono text-[10px] tracking-[0.22em] text-white/40 uppercase">
+                          Avg rating
+                        </div>
+                        <div className="font-display text-3xl text-dugout-gold mt-1 tabular-nums">
+                          {animAvgRating > 0 ? animAvgRating : "—"}
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* 5 slots */}
+                    <div className="relative grid grid-cols-5 gap-2">
+                      {slots.map((slot, idx) => (
+                        <SquadSlot
+                          key={idx}
+                          slot={slot}
+                          index={idx}
+                          onClear={() => clearSlot(idx)}
+                          justFilled={lastFilledIdx === idx}
+                        />
+                      ))}
+
+                      {/* Confetti burst when squad becomes valid */}
+                      {celebrate && (
+                        <div className="pointer-events-none absolute inset-0 flex items-center justify-center z-30">
+                          {Array.from({ length: 14 }).map((_, i) => {
+                            const angle = (i / 14) * Math.PI * 2;
+                            const dist = 40 + (i % 4) * 14;
+                            return (
+                              <span
+                                key={i}
+                                className="absolute h-1.5 w-1.5 rounded-sm"
+                                style={{
+                                  background: i % 3 === 0 ? "#00FF87" : i % 3 === 1 ? "#D4AF37" : "#FFFFFF",
+                                  ["--cx" as any]: `${Math.cos(angle) * dist}px`,
+                                  ["--cy" as any]: `${Math.sin(angle) * dist}px`,
+                                  animation: `confetti-up 1100ms cubic-bezier(0.23, 1, 0.32, 1) forwards`,
+                                  animationDelay: `${i * 20}ms`,
+                                }}
+                              />
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Position breakdown */}
+                    <div className="mt-6 grid grid-cols-5 gap-2 font-mono text-[10px]">
+                      {(["GK", "DEF", "MID", "FWD", "FLEX"] as Position[]).map((pos) => {
+                        const count = slots.filter((s) => s.player?.position === pos).length;
+                        const target = pos === "GK" ? "1" : "—";
+                        return (
+                          <div
+                            key={pos}
+                            className={`rounded-lg p-2 text-center hairline
+                              ${pos === "GK" && count === 1 ? "bg-dugout-electric/10" : "bg-white/[0.03]"}`}
+                          >
+                            <div className="text-white/40 tracking-[0.15em]">{pos}</div>
+                            <div className="text-white text-sm mt-0.5">
+                              {count}
+                              <span className="text-white/30">/{target}</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {/* Mint CTA */}
+                    <div className="mt-6">
+                      {!isConnected ? (
+                        <div className="flex flex-col items-center gap-3 py-2">
+                          <p className="text-white/50 text-[13px]">Connect wallet to mint</p>
+                          <ConnectButton />
+                        </div>
+                      ) : isMinted ? (
+                        <MintSuccessCTA />
+                      ) : (
+                        <button
+                          onClick={handleMint}
+                          disabled={!isReady || isMinting || isConfirming}
+                          className={`group relative w-full inline-flex items-center justify-center gap-2 rounded-full
+                            bg-dugout-gold pl-6 pr-2 py-3 text-dugout-black overflow-hidden
+                            transition-transform duration-150 ease-out-strong active:scale-[0.97]
+                            hover:bg-dugout-gold-light
+                            disabled:opacity-40 disabled:cursor-not-allowed disabled:active:scale-100
+                            ${isReady && !isMinting && !isConfirming ? "animate-hot-edge" : ""}`}
+                        >
+                          {/* Gold sweep when ready */}
+                          {isReady && !isMinting && !isConfirming && (
+                            <span aria-hidden className="button-sweep-overlay" />
+                          )}
+                          <span className="relative font-semibold text-[15px] tracking-tight">
+                            {isMinting
+                              ? "Confirm in wallet…"
+                              : isConfirming
+                                ? "Minting on-chain…"
+                                : isReady ? "★ MINT SQUAD" : "Mint Squad"}
+                          </span>
+                          <span
+                            className="relative flex h-9 w-9 items-center justify-center rounded-full bg-dugout-black/15
+                              transition-transform duration-200 ease-out-strong
+                              group-hover:translate-x-0.5 group-hover:-translate-y-[1px]"
+                          >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                              <path d="M7 17L17 7M17 7H8M17 7V16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                          </span>
+                        </button>
+                      )}
+
+                      {writeError && (
+                        <p className="mt-3 font-mono text-[11px] text-dugout-red text-center">
+                          {(writeError as Error).message.split("\n")[0]}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Player browser — right side */}
+              <div className="lg:col-span-7">
+                {/* Filter row */}
+                <div className="rounded-2xl p-1.5 bg-white/[0.04] hairline-strong mb-4">
+                  <div className="rounded-xl bg-dugout-surface/60 hairline inner-glow p-2 flex flex-wrap items-center gap-2">
+                    {/* Position filter pills */}
+                    <div className="flex items-center gap-1">
+                      {(["ALL", ...POSITIONS.filter((p) => p !== "FLEX")] as const).map((pos) => (
+                        <button
+                          key={pos}
+                          onClick={() => setFilter(pos as Position | "ALL")}
+                          className={`rounded-full px-3 py-1.5 font-mono text-[11px] tracking-[0.15em]
+                            transition-colors duration-150
+                            ${
+                              filter === pos
+                                ? "bg-dugout-gold text-dugout-black"
+                                : "text-white/60 hover:text-white hover:bg-white/5"
+                            }`}
+                        >
+                          {pos}
+                        </button>
+                      ))}
+                    </div>
+                    {/* Search */}
+                    <div className="ml-auto flex-1 min-w-[180px] flex items-center gap-2 rounded-full bg-black/30 px-3 py-1.5 hairline">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="text-white/40">
+                        <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.5" />
+                        <path d="M21 21l-4-4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+                      </svg>
+                      <input
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Search player or nation…"
+                        className="bg-transparent text-[13px] text-white placeholder:text-white/30 outline-none w-full"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Player grid */}
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                  {filtered.map((p, i) => {
+                    const selected = isInSquad(p.id);
+                    const flying = flightId === p.id;
+                    return (
+                      <div
+                        key={p.id}
+                        className={`reveal flex justify-center ${flying ? "animate-card-flight" : ""}`}
+                        style={{ ["--stagger-delay" as any]: `${Math.min(i * 18, 360)}ms` }}
+                      >
+                        <PlayerCard
+                          player={p}
+                          rarity="BRONZE"
+                          size="sm"
+                          selected={selected}
+                          onClick={() => pickPlayer(p)}
+                        />
+                      </div>
+                    );
+                  })}
+
+                  {filtered.length === 0 && (
+                    <div className="col-span-full text-center py-16 text-white/40 font-mono text-sm">
+                      No players match — clear filters.
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <RelatedLinks current="/squad" />
+        </div>
+      </main>
+    </>
+  );
+}
+
+// ─── Sub-components ────────────────────────────────────────────────────────────
+
+function SquadSlot({
+  slot,
+  index,
+  onClear,
+  justFilled,
+}: {
+  slot: Slot;
+  index: number;
+  onClear: () => void;
+  justFilled: boolean;
+}) {
+  if (slot.player) {
+    return (
+      <button
+        onClick={onClear}
+        className={`group relative aspect-[3/4] rounded-xl overflow-hidden
+          transition-transform duration-150 ease-out-strong active:scale-[0.95]
+          ${justFilled ? "animate-slot-fill" : ""}`}
+        style={{ perspective: "800px" }}
+        title="Click to remove"
+      >
+        <div className="absolute inset-0 rounded-xl bg-gradient-to-br from-dugout-pitch via-dugout-surface to-dugout-black hairline-strong inner-glow" />
+
+        {/* Player face mini-bg */}
+        <img
+          src={`/players/${slot.player.id}.png`}
+          alt=""
+          className="absolute inset-0 m-auto h-3/4 w-auto opacity-75 object-contain object-bottom"
+          draggable={false}
+          onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
+        />
+
+        <div className="relative h-full flex flex-col items-center justify-end p-1.5 bg-gradient-to-t from-black/60 to-transparent">
+          <div className="font-mono text-[8px] tracking-[0.15em] text-dugout-gold/80">
+            {slot.player.position}
+          </div>
+          <div className="font-display text-white text-base mt-1 text-center leading-tight line-clamp-2">
+            {slot.player.shortName.split(" ").pop()?.toUpperCase()}
+          </div>
+          <div className="font-mono text-[9px] text-white/40 mt-0.5">
+            {slot.player.rating} OVR
+          </div>
+        </div>
+
+        {/* Ring flash overlay on fill */}
+        {justFilled && (
+          <span
+            aria-hidden
+            className="pointer-events-none absolute inset-0 rounded-xl"
+            style={{
+              animation: "ready-ring 700ms ease-out forwards",
+            }}
+          />
+        )}
+
+        {/* Hover X overlay */}
+        <div className="absolute inset-0 bg-dugout-red/80 opacity-0 group-hover:opacity-100 transition-opacity duration-150 flex items-center justify-center">
+          <span className="text-white font-mono text-[10px] tracking-[0.2em]">REMOVE</span>
+        </div>
+      </button>
+    );
+  }
+  return (
+    <div className="aspect-[3/4] rounded-xl border border-dashed border-white/15 flex items-center justify-center text-white/20 transition-colors duration-200 hover:border-white/30">
+      <span className="font-display text-2xl">{index + 1}</span>
+    </div>
+  );
+}
+
+function AlreadyMintedPanel() {
+  return (
+    <div className="rounded-[2rem] p-1.5 bg-white/[0.04] hairline-strong">
+      <div className="rounded-[calc(2rem-0.375rem)] bg-dugout-surface/60 hairline inner-glow p-12 text-center">
+        <div className="inline-flex items-center gap-2 rounded-full bg-dugout-electric/10 text-dugout-electric px-3 py-1">
+          <span className="h-1.5 w-1.5 rounded-full bg-dugout-electric shadow-[0_0_8px_rgba(0,255,135,0.8)]" />
+          <span className="font-mono text-[11px] tracking-[0.2em] uppercase">Squad already minted</span>
+        </div>
+        <h2 className="mt-6 font-display text-white text-5xl sm:text-6xl">
+          Your eleven, locked in.
+        </h2>
+        <p className="mt-3 text-white/55 max-w-md mx-auto">
+          You've already drafted your World Cup squad. Time to put it to work — find an opponent
+          and stake on the next matchday.
+        </p>
+        <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
+          <Link
+            href="/wars"
+            className="group inline-flex items-center gap-2 rounded-full bg-dugout-gold pl-6 pr-2 py-2 text-dugout-black
+              transition-transform duration-150 ease-out-strong active:scale-[0.97] hover:bg-dugout-gold-light"
+          >
+            <span className="font-semibold text-[14px]">Enter Squad Wars</span>
+            <span className="flex h-8 w-8 items-center justify-center rounded-full bg-dugout-black/15
+              transition-transform duration-200 ease-out-strong group-hover:translate-x-0.5 group-hover:-translate-y-[1px]">
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
+                <path d="M7 17L17 7M17 7H8M17 7V16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </span>
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function MintSuccessCTA() {
+  return (
+    <div className="rounded-2xl bg-dugout-electric/10 hairline-strong p-4 text-center">
+      <div className="font-mono text-[10px] tracking-[0.22em] text-dugout-electric uppercase mb-2">
+        Squad Minted
+      </div>
+      <Link
+        href="/wars"
+        className="inline-flex items-center gap-2 font-semibold text-white text-sm hover:text-dugout-gold transition-colors"
+      >
+        Enter Squad Wars →
+      </Link>
+    </div>
+  );
+}

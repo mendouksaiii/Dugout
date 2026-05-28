@@ -20,7 +20,7 @@ const config: HardhatUserConfig = {
   networks: {
     xlayerTestnet: {
       url: "https://testrpc.xlayer.tech",
-      chainId: 195,
+      chainId: 1952,
       accounts: [PRIVATE_KEY],
     },
     xlayer: {
@@ -37,7 +37,7 @@ const config: HardhatUserConfig = {
     customChains: [
       {
         network: "xlayerTestnet",
-        chainId: 195,
+        chainId: 1952,
         urls: {
           apiURL: "https://www.oklink.com/api/v5/explorer/contract/verify-source-code-plugin/XLAYER_TESTNET",
           browserURL: "https://www.oklink.com/xlayer-test",
