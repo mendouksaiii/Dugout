@@ -642,6 +642,45 @@ function CompletePanel({ state, warId, onContinue }: { state: MatchState; warId:
   const accuracy = state.decisionsTaken.length === 0
     ? 0
     : Math.round((state.decisionsTaken.filter((d) => d.success).length / state.decisionsTaken.length) * 100);
+
+  // ─── On-chain finalize state ──────────────────────────────────────────
+  const [isBotWar, setIsBotWar] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    setIsBotWar(sessionStorage.getItem(`bot_war_${warId}`) === "1");
+  }, [warId]);
+
+  const [finalize, setFinalize] = useState<"idle" | "pending" | "done" | "error">("idle");
+  const [finalizeErr, setFinalizeErr] = useState<string | null>(null);
+  const [finalizeResult, setFinalizeResult] = useState<{
+    resolveTxHash?: string; winner?: string; challengerScore?: string; opponentScore?: string;
+  } | null>(null);
+
+  async function finalizeOnChain() {
+    if (finalize === "pending" || finalize === "done") return;
+    setFinalize("pending");
+    setFinalizeErr(null);
+    try {
+      const res = await fetch("/api/bot/finalize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ warId }),
+      });
+      const j = await res.json();
+      if (!res.ok || !j.ok) throw new Error(j.error || `bot/finalize ${res.status}`);
+      setFinalizeResult({
+        resolveTxHash: j.resolveTxHash,
+        winner: j.winner,
+        challengerScore: j.challengerScore,
+        opponentScore: j.opponentScore,
+      });
+      setFinalize("done");
+    } catch (e) {
+      setFinalizeErr(e instanceof Error ? e.message : String(e));
+      setFinalize("error");
+    }
+  }
+
   return (
     <div className="rounded-[2rem] p-1.5 bg-gradient-to-br from-dugout-gold/60 via-white/10 to-dugout-electric/40 animate-hot-edge">
       <div className="rounded-[calc(2rem-0.375rem)] bg-dugout-surface/80 hairline inner-glow p-10 text-center">
@@ -659,6 +698,57 @@ function CompletePanel({ state, warId, onContinue }: { state: MatchState; warId:
           <span>·</span>
           <span>{state.decisionsTaken.length} moments resolved</span>
         </div>
+
+        {isBotWar && finalize !== "done" && (
+          <div className="mt-8 flex flex-col items-center gap-3">
+            <button
+              onClick={finalizeOnChain}
+              disabled={finalize === "pending"}
+              className="group inline-flex items-center gap-3 rounded-full bg-dugout-electric pl-7 pr-2 py-3 text-dugout-black transition-transform duration-150 ease-out-strong active:scale-[0.97] hover:brightness-110 disabled:opacity-60 animate-hot-edge"
+            >
+              <span className="font-display text-xl tracking-wider">
+                {finalize === "pending" ? "SETTLING ON-CHAIN…" : "FINALIZE & CLAIM POT"}
+              </span>
+              <span className="flex h-10 w-10 items-center justify-center rounded-full bg-dugout-black/15">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+                  <path d="M7 17L17 7M17 7H8M17 7V16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </span>
+            </button>
+            <p className="font-mono text-[10px] tracking-[0.22em] text-white/45 uppercase max-w-md">
+              ★ Treasury finalizes the matchday and resolves the war on-chain. Winner receives 95% of the pot.
+            </p>
+            {finalizeErr && (
+              <p className="font-mono text-[10px] tracking-[0.18em] text-dugout-red/80 max-w-md uppercase">
+                {finalizeErr.slice(0, 200)}
+              </p>
+            )}
+          </div>
+        )}
+
+        {finalize === "done" && (
+          <div className="mt-8 rounded-2xl bg-dugout-electric/10 hairline p-5 inline-block text-left">
+            <div className="font-mono text-[10px] tracking-[0.22em] text-dugout-electric uppercase mb-2">★ Settled on-chain ★</div>
+            <div className="font-display text-2xl text-white">
+              {finalizeResult?.winner && finalizeResult.winner !== "0x0000000000000000000000000000000000000000"
+                ? <>Winner <span className="text-dugout-electric">{finalizeResult.winner.slice(0, 6)}…{finalizeResult.winner.slice(-4)}</span></>
+                : <>Draw refunded</>}
+            </div>
+            <div className="font-mono text-[11px] tracking-[0.18em] text-white/55 mt-2">
+              CHAIN SCORE · {finalizeResult?.challengerScore}–{finalizeResult?.opponentScore}
+            </div>
+            {finalizeResult?.resolveTxHash && (
+              <a
+                href={`https://www.oklink.com/xlayer-test/tx/${finalizeResult.resolveTxHash}`}
+                target="_blank" rel="noreferrer"
+                className="block mt-3 font-mono text-[10px] tracking-[0.22em] text-dugout-gold hover:brightness-110 underline uppercase"
+              >
+                View tx ↗
+              </a>
+            )}
+          </div>
+        )}
+
         <button
           onClick={onContinue}
           className="mt-8 group inline-flex items-center gap-3 rounded-full bg-dugout-gold pl-8 pr-2 py-3 text-dugout-black transition-transform duration-150 ease-out-strong active:scale-[0.97] hover:bg-dugout-gold-light"

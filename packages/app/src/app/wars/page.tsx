@@ -8,8 +8,9 @@ import {
   useReadContracts,
   useWriteContract,
   useWaitForTransactionReceipt,
+  usePublicClient,
 } from "wagmi";
-import { parseEther, formatEther, zeroAddress, type Address } from "viem";
+import { parseEther, formatEther, zeroAddress, decodeEventLog, type Address } from "viem";
 import Link from "next/link";
 import { Navbar } from "@/components/layout/Navbar";
 import { Backdrop } from "@/components/ui/Backdrop";
@@ -132,10 +133,14 @@ export default function WarsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [createMD, setCreateMD] = useState(4);
   const [createStake, setCreateStake] = useState("0.01");
+  const [challengeMode, setChallengeMode] = useState<"human" | "bot">("human");
+  const [botPhase, setBotPhase] = useState<"idle" | "awaiting-bot" | "ready" | "error">("idle");
+  const [botError, setBotError] = useState<string | null>(null);
 
+  const publicClient = usePublicClient();
   const { writeContract, data: txHash, isPending: txSending, error: txError } =
     useWriteContract();
-  const { isLoading: txConfirming, isSuccess: txDone } =
+  const { data: txReceipt, isLoading: txConfirming, isSuccess: txDone } =
     useWaitForTransactionReceipt({ hash: txHash });
 
   // Refetch all war state when a tx confirms (creates / accepts / locks)
@@ -149,6 +154,8 @@ export default function WarsPage() {
 
   function handleCreate() {
     if (!hasContracts) return alert("Contracts not deployed yet — set NEXT_PUBLIC_*_ADDRESS in .env.local");
+    setChallengeMode("human");
+    setBotError(null);
     writeContract({
       address: CONTRACT_ADDRESSES.squadWars,
       abi: SQUAD_WARS_ABI,
@@ -157,6 +164,69 @@ export default function WarsPage() {
       value: parseEther(createStake),
     });
   }
+
+  function handleChallengeBot() {
+    if (!hasContracts) return alert("Contracts not deployed yet");
+    setChallengeMode("bot");
+    setBotPhase("idle");
+    setBotError(null);
+    writeContract({
+      address: CONTRACT_ADDRESSES.squadWars,
+      abi: SQUAD_WARS_ABI,
+      functionName: "createWar",
+      args: [BigInt(createMD)],
+      value: parseEther(createStake),
+    });
+  }
+
+  // After the createWar tx confirms in bot mode: extract warId from the
+  // WarCreated event, then ask the backend bot to acceptWar + lockDecision.
+  useEffect(() => {
+    if (!txDone || !txReceipt || challengeMode !== "bot" || botPhase !== "idle") return;
+    let warId: bigint | null = null;
+    for (const log of txReceipt.logs) {
+      try {
+        const decoded = decodeEventLog({
+          abi: SQUAD_WARS_ABI,
+          data: log.data,
+          topics: log.topics,
+        });
+        if (decoded.eventName === "WarCreated") {
+          warId = (decoded.args as { warId: bigint }).warId;
+          break;
+        }
+      } catch { /* not a SquadWars event */ }
+    }
+    if (warId === null) {
+      setBotError("Couldn't read war id from the transaction.");
+      setBotPhase("error");
+      return;
+    }
+    const stakeWei = parseEther(createStake).toString();
+    const wid = warId;
+    (async () => {
+      setBotPhase("awaiting-bot");
+      try {
+        const res = await fetch("/api/bot/challenge", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ warId: wid.toString(), stakeWei }),
+        });
+        const j = await res.json();
+        if (!res.ok || !j.ok) throw new Error(j.error || `bot/challenge ${res.status}`);
+        setBotPhase("ready");
+        // Stash setup hint so /squad-setup default captain matches the user's choice slot
+        if (typeof window !== "undefined") {
+          sessionStorage.setItem(`bot_war_${wid}`, "1");
+        }
+        router.push(`/squad-setup/${wid}`);
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setBotError(msg);
+        setBotPhase("error");
+      }
+    })();
+  }, [txDone, txReceipt, challengeMode, botPhase, createStake, router]);
 
   function handleAccept(warId: bigint, stake: bigint) {
     if (!hasContracts) return alert("Contracts not deployed yet");
@@ -233,16 +303,36 @@ export default function WarsPage() {
                   </div>
                 </div>
               )}
-              <button
-                onClick={() => setShowCreate(true)}
-                className="group inline-flex items-center gap-2 rounded-full bg-dugout-gold pl-6 pr-2 py-2.5 text-dugout-black
-                  transition-transform duration-150 ease-out-strong active:scale-[0.97] hover:bg-dugout-gold-light"
-              >
-                <span className="font-display text-lg tracking-wider">CREATE WAR</span>
-                <span className="flex h-9 w-9 items-center justify-center rounded-full bg-dugout-black/15 transition-transform duration-200 ease-out-strong group-hover:translate-x-0.5 group-hover:-translate-y-[1px]">
-                  <Arrow />
-                </span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setChallengeMode("bot"); setShowCreate(true); }}
+                  disabled={!isConnected || botPhase === "awaiting-bot"}
+                  className="group inline-flex items-center gap-2 rounded-full bg-dugout-electric pl-6 pr-2 py-2.5 text-dugout-black
+                    transition-transform duration-150 ease-out-strong active:scale-[0.97] hover:brightness-110 disabled:opacity-60 disabled:cursor-not-allowed animate-hot-edge"
+                >
+                  <span className="font-display text-lg tracking-wider">
+                    {botPhase === "awaiting-bot" ? "BOT STAKING…" : "CHALLENGE BOT"}
+                  </span>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-dugout-black/15 transition-transform duration-200 ease-out-strong group-hover:translate-x-0.5 group-hover:-translate-y-[1px]">
+                    <Arrow />
+                  </span>
+                </button>
+                <button
+                  onClick={() => { setChallengeMode("human"); setShowCreate(true); }}
+                  className="group inline-flex items-center gap-2 rounded-full bg-dugout-gold pl-6 pr-2 py-2.5 text-dugout-black
+                    transition-transform duration-150 ease-out-strong active:scale-[0.97] hover:bg-dugout-gold-light"
+                >
+                  <span className="font-display text-lg tracking-wider">OPEN WAR</span>
+                  <span className="flex h-9 w-9 items-center justify-center rounded-full bg-dugout-black/15 transition-transform duration-200 ease-out-strong group-hover:translate-x-0.5 group-hover:-translate-y-[1px]">
+                    <Arrow />
+                  </span>
+                </button>
+              </div>
+              {botError && (
+                <div className="rounded-xl bg-dugout-red/10 hairline px-3 py-2 font-mono text-[10px] tracking-[0.18em] text-dugout-red/90 max-w-[28ch] text-right uppercase">
+                  Bot couldn't stake: {botError.slice(0, 80)}
+                </div>
+              )}
             </div>
           </div>
 
@@ -390,9 +480,11 @@ export default function WarsPage() {
             onMD={setCreateMD}
             onStake={setCreateStake}
             onClose={() => setShowCreate(false)}
-            onCreate={handleCreate}
-            sending={txSending || txConfirming}
-            done={txDone}
+            onCreate={challengeMode === "bot" ? handleChallengeBot : handleCreate}
+            sending={txSending || txConfirming || botPhase === "awaiting-bot"}
+            done={txDone && challengeMode === "human"}
+            mode={challengeMode}
+            botPhase={botPhase}
           />
         )}
       </main>
@@ -679,13 +771,16 @@ function ResolvedRowChain({ war, me, last }: { war: ChainWar; me?: string; last:
 }
 
 function CreateWarModal({
-  matchday, stake, onMD, onStake, onClose, onCreate, sending, done,
+  matchday, stake, onMD, onStake, onClose, onCreate, sending, done, mode, botPhase,
 }: {
   matchday: number; stake: string;
   onMD: (n: number) => void; onStake: (s: string) => void;
   onClose: () => void; onCreate: () => void;
   sending: boolean; done: boolean;
+  mode: "human" | "bot";
+  botPhase: "idle" | "awaiting-bot" | "ready" | "error";
 }) {
+  const isBot = mode === "bot";
   useEffect(() => {
     if (done) {
       const t = setTimeout(onClose, 1200);
@@ -700,8 +795,12 @@ function CreateWarModal({
         <div className="rounded-[calc(2rem-0.375rem)] bg-dugout-surface hairline inner-glow p-8">
           <div className="flex items-start justify-between">
             <div>
-              <div className="font-mono text-[10px] tracking-[0.22em] text-dugout-gold uppercase">New challenge</div>
-              <h2 className="mt-2 font-display text-white text-4xl leading-none">CREATE WAR</h2>
+              <div className={`font-mono text-[10px] tracking-[0.22em] uppercase ${isBot ? "text-dugout-electric" : "text-dugout-gold"}`}>
+                {isBot ? "Solo · vs Bot opponent" : "New challenge · open war"}
+              </div>
+              <h2 className="mt-2 font-display text-white text-4xl leading-none">
+                {isBot ? "CHALLENGE BOT" : "OPEN WAR"}
+              </h2>
             </div>
             <button onClick={onClose} className="text-white/40 hover:text-white text-2xl leading-none transition-colors">×</button>
           </div>
@@ -767,13 +866,27 @@ function CreateWarModal({
                 </span>
               </div>
 
+              {isBot && (
+                <p className="font-mono text-[10px] tracking-[0.18em] text-white/45 leading-relaxed uppercase">
+                  Bot opponent stakes the same amount from the treasury wallet.
+                  Winner takes the full pot minus 5% protocol fee.
+                </p>
+              )}
               <button
                 onClick={onCreate}
                 disabled={sending || !stake}
-                className="w-full rounded-full bg-dugout-gold py-3.5 text-dugout-black font-display text-xl tracking-wider
-                  transition-transform duration-150 ease-out-strong active:scale-[0.97] hover:bg-dugout-gold-light disabled:opacity-50"
+                className={`w-full rounded-full py-3.5 font-display text-xl tracking-wider text-dugout-black
+                  transition-transform duration-150 ease-out-strong active:scale-[0.97] disabled:opacity-50 ${
+                  isBot ? "bg-dugout-electric hover:brightness-110" : "bg-dugout-gold hover:bg-dugout-gold-light"
+                }`}
               >
-                {sending ? "POSTING…" : `POST WAR · ${stake} OKB`}
+                {botPhase === "awaiting-bot"
+                  ? "BOT STAKING…"
+                  : sending
+                    ? "POSTING…"
+                    : isBot
+                      ? `STAKE & CHALLENGE BOT · ${stake} OKB`
+                      : `POST WAR · ${stake} OKB`}
               </button>
             </div>
           )}
