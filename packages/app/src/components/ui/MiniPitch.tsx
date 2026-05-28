@@ -39,6 +39,8 @@ interface MiniPitchProps {
   tickMs?: number;
   /** Triggers dramatic celebration sequence — ball flies to goal + overlay */
   celebration?: Celebration;
+  /** Freeze player + ball motion (used while a decision panel is open) */
+  paused?: boolean;
 }
 
 /**
@@ -52,6 +54,7 @@ export function MiniPitch({
   oppScore,
   tickMs = 1400,
   celebration = null,
+  paused = false,
 }: MiniPitchProps) {
   // ─── Build the 22 dots + ball with stable home positions ───────────────────
   const dots = useMemo<Dot[]>(() => {
@@ -109,7 +112,10 @@ export function MiniPitch({
   }, [dots]);
 
   // ─── Movement tick — wander around home zone ──────────────────────────────
+  // Paused while a decision panel is open — the pitch freezes so the user can
+  // focus on the choice. Resumes on decision close.
   useEffect(() => {
+    if (paused) return;
     const t = setInterval(() => {
       setPositions((prev) => {
         const next: Record<string, { x: number; y: number }> = { ...prev };
@@ -133,7 +139,7 @@ export function MiniPitch({
       }));
     }, tickMs);
     return () => clearInterval(t);
-  }, [dots, tickMs]);
+  }, [dots, tickMs, paused]);
 
   // ─── When a decision fires, snap ball to that player ───────────────────────
   useEffect(() => {

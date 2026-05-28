@@ -7,7 +7,7 @@ import { Navbar } from "@/components/layout/Navbar";
 import { Backdrop } from "@/components/ui/Backdrop";
 import { HoverWord, LetterWave } from "@/components/ui/HoverText";
 import { MiniPitch, type Celebration } from "@/components/ui/MiniPitch";
-import { playCrowd, playKick } from "@/lib/sounds";
+import { playCrowd, playKick, playWhistle, playSuccess, playFail } from "@/lib/sounds";
 import { FOOTBALL_IMAGERY } from "@/lib/imagery";
 import playersData from "@/data/players.json";
 import { Player } from "@/types";
@@ -69,6 +69,19 @@ export default function MatchPage() {
   const [state, setState] = useState<MatchState | null>(null);
   const [phase, setPhase] = useState<"intro" | "live" | "decision" | "complete">("intro");
 
+  // ─── Real-war mode — when the war is on-chain (bot or future human),
+  // we hide success probabilities and apply harsher repercussions for wrong
+  // calls so the stakes feel real. Determined by sessionStorage flag set by
+  // /wars when the user accepts/creates a staked war.
+  const [isRealWar, setIsRealWar] = useState(false);
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const flag =
+      sessionStorage.getItem(`bot_war_${warId}`) === "1" ||
+      sessionStorage.getItem(`real_war_${warId}`) === "1";
+    setIsRealWar(flag);
+  }, [warId]);
+
   // ─── Music ducking — silence background music while the match is live,
   // let cheers + SFX carry the moment. Restore when match completes or user leaves.
   useEffect(() => {
@@ -82,6 +95,9 @@ export default function MatchPage() {
   useEffect(() => {
     if (phase === "complete" && typeof window !== "undefined") {
       window.dispatchEvent(new Event("dugout:music-unduck"));
+      // Full-time whistle + crowd
+      playWhistle();
+      setTimeout(() => playCrowd(4), 350);
     }
   }, [phase]);
   const [currentDecision, setCurrentDecision] = useState<{
@@ -181,13 +197,27 @@ export default function MatchPage() {
       const prob = currentDecision.probs[idx];
       const isCaptainPlay = currentDecision.player.player.id === state.setup.captainId;
       const outcome = resolveDecision(option, prob, isCaptainPlay);
-      const newState = applyOutcomeToState(
+      let newState = applyOutcomeToState(
         state,
         currentDecision.template,
         option,
         currentDecision.player,
         outcome,
       );
+
+      // ─── Real-war repercussion — every wrong call hands the opponent
+      // an extra point. On-chain stakes mean misclicks should bite.
+      if (isRealWar && !outcome.success) {
+        const bonusPenalty =
+          outcome.failType === "concede_penalty" ? 2
+          : outcome.failType === "concede_goal"   ? 1
+          : 1;
+        newState = {
+          ...newState,
+          oppScore: newState.oppScore + bonusPenalty,
+        };
+        outcome.oppPts = (outcome.oppPts ?? 0) + bonusPenalty;
+      }
 
       // Trigger celebration based on outcome
       let celeb: Celebration = null;
@@ -279,8 +309,9 @@ export default function MatchPage() {
               activePlayerId={currentDecision?.player.player.id ?? null}
               yourScore={state.yourScore}
               oppScore={state.oppScore}
-              tickMs={phase === "decision" ? 2200 : 1300}
+              tickMs={1100}
               celebration={celebration}
+              paused={phase === "decision" || phase === "complete"}
             />
           </div>
 
@@ -314,10 +345,11 @@ export default function MatchPage() {
                   isCaptain={currentDecision.player.player.id === state.setup.captainId}
                   onPick={chooseOption}
                   timerMs={DECISION_TIMER_MS}
+                  hideProbs={isRealWar}
                 />
               )}
               {phase === "complete" && (
-                <CompletePanel state={state} warId={warId} onContinue={() => router.push(`/war/${warId}`)} />
+                <CompletePanel state={state} warId={warId} isRealWar={isRealWar} onContinue={() => router.push(`/war/${warId}`)} />
               )}
             </div>
           </div>
@@ -511,7 +543,7 @@ function ResultFlash({ result }: { result: { success: boolean; pts: number; oppP
 }
 
 function DecisionPanel({
-  template, player, probs, isCaptain, onPick, timerMs,
+  template, player, probs, isCaptain, onPick, timerMs, hideProbs = false,
 }: {
   template: DecisionTemplate;
   player: PlayerMatchState;
@@ -519,6 +551,7 @@ function DecisionPanel({
   isCaptain: boolean;
   onPick: (o: DecisionOption) => void;
   timerMs: number;
+  hideProbs?: boolean;
 }) {
   const [remaining, setRemaining] = useState(timerMs);
 
@@ -577,15 +610,17 @@ function DecisionPanel({
               onClick={() => onPick(o)}
               className="group w-full text-left rounded-xl p-4 bg-white/[0.04] hairline hover:bg-white/[0.08] transition-all duration-150 ease-out-strong active:scale-[0.99] hover-lift relative overflow-hidden"
             >
-              {/* Probability bar */}
-              <div className="absolute inset-y-0 left-0 transition-all duration-700"
-                style={{
-                  width: `${probs[i]}%`,
-                  background: probs[i] > 60 ? "linear-gradient(to right, rgba(0,255,135,0.18), rgba(0,255,135,0.02))"
-                            : probs[i] > 35 ? "linear-gradient(to right, rgba(212,175,55,0.18), rgba(212,175,55,0.02))"
-                                            : "linear-gradient(to right, rgba(255,107,107,0.18), rgba(255,107,107,0.02))",
-                }}
-              />
+              {/* Probability bar — hidden in real-war mode (no telemetry) */}
+              {!hideProbs && (
+                <div className="absolute inset-y-0 left-0 transition-all duration-700"
+                  style={{
+                    width: `${probs[i]}%`,
+                    background: probs[i] > 60 ? "linear-gradient(to right, rgba(0,255,135,0.18), rgba(0,255,135,0.02))"
+                              : probs[i] > 35 ? "linear-gradient(to right, rgba(212,175,55,0.18), rgba(212,175,55,0.02))"
+                                              : "linear-gradient(to right, rgba(255,107,107,0.18), rgba(255,107,107,0.02))",
+                  }}
+                />
+              )}
               <div className="relative flex items-center justify-between gap-4">
                 <div>
                   <div className="font-display text-xl text-white leading-none mb-1">{o.label}</div>
@@ -599,29 +634,93 @@ function DecisionPanel({
                       {o.risk} risk
                     </span>
                     <span className="text-white/45">+{o.reward_pts}</span>
-                    <span className="rounded-full px-2 py-0.5 bg-dugout-red/10 text-dugout-red/80" title="If this fails">
-                      fail → {consequenceShort(o.failConsequence)}
-                    </span>
+                    {!hideProbs && (
+                      <span className="rounded-full px-2 py-0.5 bg-dugout-red/10 text-dugout-red/80" title="If this fails">
+                        fail → {consequenceShort(o.failConsequence)}
+                      </span>
+                    )}
                   </div>
                 </div>
                 <div className="text-right">
-                  <div className="font-display text-3xl tabular-nums leading-none" style={{
-                    color: probs[i] > 60 ? "#7CFFC4" : probs[i] > 35 ? "#F5D26C" : "#FF6B6B",
-                  }}>
-                    {probs[i]}%
-                  </div>
-                  <div className="font-mono text-[9px] tracking-[0.22em] text-white/40 uppercase">success</div>
+                  {hideProbs ? (
+                    <>
+                      <div className="font-display text-3xl tabular-nums leading-none text-white/30">??%</div>
+                      <div className="font-mono text-[9px] tracking-[0.22em] text-white/40 uppercase">hidden</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="font-display text-3xl tabular-nums leading-none" style={{
+                        color: probs[i] > 60 ? "#7CFFC4" : probs[i] > 35 ? "#F5D26C" : "#FF6B6B",
+                      }}>
+                        {probs[i]}%
+                      </div>
+                      <div className="font-mono text-[9px] tracking-[0.22em] text-white/40 uppercase">success</div>
+                    </>
+                  )}
                 </div>
               </div>
             </button>
           ))}
         </div>
 
-        <div className="mt-5 font-mono text-[10px] tracking-[0.22em] text-white/30 uppercase text-center">
-          Timeout → highest probability auto-picks
+        <div className="mt-5 font-mono text-[10px] tracking-[0.22em] uppercase text-center">
+          {hideProbs ? (
+            <span className="text-dugout-red/70">
+              ★ Real-war mode · probabilities hidden · wrong calls give the opponent a goal ★
+            </span>
+          ) : (
+            <span className="text-white/30">Timeout → highest probability auto-picks</span>
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+function FullTimeConfetti() {
+  const pieces = useMemo(
+    () =>
+      Array.from({ length: 28 }, (_, i) => ({
+        i,
+        x: (i * 137.5) % 100,
+        delay: (i % 7) * 0.12,
+        dur: 2.4 + (i % 5) * 0.35,
+        color: ["#D4AF37", "#00FF87", "#FFFFFF", "#F5D26C", "#7CFFC4"][i % 5],
+      })),
+    [],
+  );
+  return (
+    <>
+      <div className="pointer-events-none absolute inset-0 overflow-hidden">
+        {pieces.map((p) => (
+          <span
+            key={p.i}
+            className="absolute h-2 w-2 rounded-sm"
+            style={{
+              left: `${p.x}%`,
+              top: "-10px",
+              background: p.color,
+              animation: `ft-confetti ${p.dur}s linear ${p.delay}s forwards`,
+              boxShadow: `0 0 6px ${p.color}88`,
+            }}
+          />
+        ))}
+      </div>
+      <style jsx>{`
+        @keyframes ft-confetti {
+          0%   { transform: translateY(-10vh) rotate(0); opacity: 1; }
+          100% { transform: translateY(120vh) rotate(540deg); opacity: 0.6; }
+        }
+        :global(.ft-shake) {
+          animation: ft-shake 0.6s cubic-bezier(.36,.07,.19,.97);
+        }
+        @keyframes ft-shake {
+          0%, 100% { transform: translateX(0); }
+          10%,30%,50%,70%,90% { transform: translateX(-6px); }
+          20%,40%,60%,80%      { transform: translateX(6px);  }
+        }
+      `}</style>
+    </>
   );
 }
 
@@ -636,12 +735,24 @@ function consequenceShort(c: string): string {
   }[c] ?? c;
 }
 
-function CompletePanel({ state, warId, onContinue }: { state: MatchState; warId: string; onContinue: () => void }) {
+function CompletePanel({ state, warId, isRealWar, onContinue }: { state: MatchState; warId: string; isRealWar: boolean; onContinue: () => void }) {
   const won = state.yourScore > state.oppScore;
   const drew = state.yourScore === state.oppScore;
   const accuracy = state.decisionsTaken.length === 0
     ? 0
     : Math.round((state.decisionsTaken.filter((d) => d.success).length / state.decisionsTaken.length) * 100);
+
+  // ─── End-of-match reveal animation ────────────────────────────────────
+  const [revealStage, setRevealStage] = useState<"flash" | "scoreboard" | "verdict" | "done">("flash");
+  useEffect(() => {
+    if (won)         playSuccess();
+    else if (!drew)  playFail();
+    const t1 = setTimeout(() => setRevealStage("scoreboard"), 700);
+    const t2 = setTimeout(() => setRevealStage("verdict"),    1500);
+    const t3 = setTimeout(() => setRevealStage("done"),       2700);
+    return () => { clearTimeout(t1); clearTimeout(t2); clearTimeout(t3); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ─── On-chain finalize state ──────────────────────────────────────────
   const [isBotWar, setIsBotWar] = useState(false);
@@ -681,19 +792,64 @@ function CompletePanel({ state, warId, onContinue }: { state: MatchState; warId:
     }
   }
 
+  const verdictColor = won ? "text-dugout-electric" : drew ? "text-white" : "text-dugout-red";
+  const verdictGlow  = won ? "0 0 60px rgba(0,255,135,0.6)" : drew ? "0 0 30px rgba(255,255,255,0.3)" : "0 0 40px rgba(255,107,107,0.5)";
+  const verdictText  = won ? "VICTORY" : drew ? "DRAW" : "DEFEAT";
+
   return (
-    <div className="rounded-[2rem] p-1.5 bg-gradient-to-br from-dugout-gold/60 via-white/10 to-dugout-electric/40 animate-hot-edge">
-      <div className="rounded-[calc(2rem-0.375rem)] bg-dugout-surface/80 hairline inner-glow p-10 text-center">
-        <div className="font-mono text-[10px] tracking-[0.22em] text-dugout-gold uppercase mb-2">Full time</div>
-        <div className="font-display text-7xl text-white tracking-wider mb-2">
-          <span className={won ? "text-dugout-electric" : drew ? "text-white" : "text-white/60"}>
-            {won ? "VICTORY" : drew ? "DRAW" : "DEFEAT"}
+    <div className={`relative rounded-[2rem] p-1.5 bg-gradient-to-br from-dugout-gold/60 via-white/10 to-dugout-electric/40 animate-hot-edge overflow-hidden ${revealStage === "flash" ? "ft-shake" : ""}`}>
+      {/* Win-only confetti */}
+      {won && revealStage !== "flash" && <FullTimeConfetti />}
+
+      <div className="rounded-[calc(2rem-0.375rem)] bg-dugout-surface/80 hairline inner-glow p-10 text-center relative">
+        {/* White-out flash when whistle blows */}
+        <div className="absolute inset-0 pointer-events-none rounded-[calc(2rem-0.375rem)]" style={{
+          background: won ? "rgba(0,255,135,0.45)" : drew ? "rgba(255,255,255,0.35)" : "rgba(255,107,107,0.4)",
+          opacity: revealStage === "flash" ? 1 : 0,
+          transition: "opacity 700ms cubic-bezier(0.4,0,0.2,1)",
+        }} />
+
+        <div className="font-mono text-[10px] tracking-[0.32em] text-dugout-gold uppercase mb-3 relative"
+          style={{ opacity: revealStage === "flash" ? 0 : 1, transition: "opacity 400ms 300ms ease-out" }}>
+          ★ FULL TIME ★
+        </div>
+
+        {/* SCOREBOARD — slams in */}
+        <div className="font-display text-7xl sm:text-8xl tabular-nums text-white relative" style={{
+          opacity: revealStage === "flash" ? 0 : 1,
+          transform: revealStage === "flash" ? "scale(0.4)" : "scale(1)",
+          transition: "transform 600ms cubic-bezier(0.22,1.6,0.36,1), opacity 400ms ease-out",
+          textShadow: revealStage !== "flash" ? "0 0 40px rgba(212,175,55,0.4)" : "none",
+        }}>
+          <span className={state.yourScore > state.oppScore ? "text-dugout-electric" : ""}>
+            {String(state.yourScore).padStart(2, "0")}
+          </span>
+          <span className="text-white/25 mx-3">—</span>
+          <span className={state.oppScore > state.yourScore ? "text-dugout-red" : ""}>
+            {String(state.oppScore).padStart(2, "0")}
           </span>
         </div>
-        <div className="font-display text-5xl tabular-nums text-white mt-4">
-          {String(state.yourScore).padStart(2, "0")} <span className="text-white/30">—</span> {String(state.oppScore).padStart(2, "0")}
+
+        {/* VERDICT — slam reveal */}
+        <div className={`font-display text-6xl sm:text-7xl tracking-[0.12em] mt-6 relative ${verdictColor}`} style={{
+          opacity: revealStage === "verdict" || revealStage === "done" ? 1 : 0,
+          transform: revealStage === "verdict" || revealStage === "done" ? "translateY(0) scale(1)" : "translateY(20px) scale(0.85)",
+          transition: "transform 500ms cubic-bezier(0.22,1.6,0.36,1), opacity 300ms ease-out",
+          textShadow: revealStage === "verdict" || revealStage === "done" ? verdictGlow : "none",
+        }}>
+          {verdictText}
         </div>
-        <div className="mt-6 inline-flex items-center gap-6 rounded-full bg-white/[0.04] hairline px-6 py-3 font-mono text-[11px] tracking-[0.22em] uppercase">
+
+        {/* Sub-line */}
+        {isRealWar && (
+          <div className="mt-3 font-mono text-[10px] tracking-[0.28em] text-dugout-gold/80 uppercase relative"
+            style={{ opacity: revealStage === "done" ? 1 : 0, transition: "opacity 400ms ease-out" }}>
+            {won ? "★ pot is yours — finalize on-chain" : drew ? "Stake refunded" : "Pot lost to opponent"}
+          </div>
+        )}
+
+        <div className="mt-6 inline-flex items-center gap-6 rounded-full bg-white/[0.04] hairline px-6 py-3 font-mono text-[11px] tracking-[0.22em] uppercase relative"
+          style={{ opacity: revealStage === "done" ? 1 : 0, transition: "opacity 400ms 100ms ease-out" }}>
           <span>Decision accuracy · <span className="text-dugout-gold">{accuracy}%</span></span>
           <span>·</span>
           <span>{state.decisionsTaken.length} moments resolved</span>
