@@ -21,24 +21,25 @@ export function EnterPitchButton({
   async function handleEnter() {
     if (transitioning) return;
 
-    await unlockAudio();
-    playKick();
-    // Tiny delay between kick and crowd
-    setTimeout(() => playCrowd(5), 220);
-
-    // Activate background music — playlist auto-starts via MusicPlayer
+    // Fire splash immediately — within one frame of the click — so the user
+    // never sees a "stuck" 5–15s gap while /play compiles / hydrates.
     if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event("dugout:splash-show"));
       sessionStorage.setItem("dugout_music_active", "1");
       window.dispatchEvent(new Event("dugout:music-activate"));
     }
 
+    unlockAudio().catch(() => {});
+    playKick();
+    setTimeout(() => playCrowd(5), 220);
+
     markPitchEntry();
     setTransitioning(true);
 
-    // Let the portal overlay reveal + sounds breathe
-    setTimeout(() => {
-      router.push(href);
-    }, 1100);
+    // Navigate immediately — the splash carries the visual load. PitchSplash
+    // listens on /play for a `dugout:splash-clear` event and fades itself out
+    // once the destination has rendered.
+    router.push(href);
   }
 
   return (
@@ -91,7 +92,9 @@ export function EnterPitchButton({
         </span>
       </button>
 
-      {transitioning && <PortalOverlay />}
+      {/* Old PortalOverlay is now superseded by PitchSplash (mounted at the
+          root layout). The splash listens for dugout:splash-show and survives
+          across navigation, then fades when the destination mounts. */}
     </>
   );
 }

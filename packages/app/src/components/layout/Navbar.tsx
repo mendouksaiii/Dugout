@@ -48,7 +48,7 @@ export function Navbar() {
             <span className="relative inline-flex h-8 w-8 items-center justify-center rounded-full overflow-hidden ring-1 ring-dugout-gold/40">
               <img
                 src="/logo.jpg"
-                alt="DUGHOLE"
+                alt="DUGOUT"
                 className="h-full w-full object-cover"
                 draggable={false}
               />

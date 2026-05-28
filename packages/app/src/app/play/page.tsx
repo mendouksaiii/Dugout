@@ -29,9 +29,18 @@ function truncate(addr?: string) {
 export default function PlayHub() {
   const { address, isConnected } = useAccount();
 
-  // Continue the crowd cheer from portal entry
+  // Continue the crowd cheer from portal entry + clear the loading splash
   useEffect(() => {
     if (consumePitchEntry()) playCrowd(4);
+    // Defer one frame so the splash overlaps with the first paint of /play
+    // (smooth crossfade) rather than disappearing before the page is ready.
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        if (typeof window !== "undefined") {
+          window.dispatchEvent(new Event("dugout:splash-clear"));
+        }
+      });
+    });
   }, []);
 
   const noAddr = "0x0000000000000000000000000000000000000000";
@@ -60,7 +69,7 @@ export default function PlayHub() {
       <WelcomePack />
 
       <main className="relative min-h-[100dvh] pt-32 sm:pt-36 pb-24 px-4 sm:px-8 overflow-hidden">
-        <Backdrop src={FOOTBALL_IMAGERY.tunnel} opacity={0.32} blur={3} overlay="hero" blend="luminosity" scale={1.06} />
+        <Backdrop src={FOOTBALL_IMAGERY.cosmicStadium} opacity={0.55} blur={2} overlay="hero" blend="normal" scale={1.04} />
         <div className="pointer-events-none absolute inset-0 -z-10 floodlight-left" />
         <div className="pointer-events-none absolute inset-0 -z-10 floodlight-right" />
         <div className="pointer-events-none absolute inset-0 -z-10 scanlines opacity-30" />

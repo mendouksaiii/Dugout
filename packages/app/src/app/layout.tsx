@@ -3,6 +3,7 @@ import "./globals.css";
 import { Providers } from "@/components/Providers";
 import { PageTransition } from "@/components/ui/PageTransition";
 import { MusicPlayer } from "@/components/ui/MusicPlayer";
+import { PitchSplash } from "@/components/ui/PitchSplash";
 
 export const viewport: Viewport = {
   themeColor: "#080B0F",
@@ -77,6 +78,7 @@ export default function RootLayout({
         <Providers>
           <PageTransition>{children}</PageTransition>
           <MusicPlayer />
+          <PitchSplash />
         </Providers>
       </body>
     </html>

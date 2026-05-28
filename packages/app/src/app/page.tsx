@@ -80,7 +80,7 @@ export default function Portal() {
           {/* Wordmark */}
           <div className="reveal flex items-center gap-3" style={{ ["--stagger-delay" as any]: "0ms" }}>
             <span className="inline-flex h-10 w-10 items-center justify-center rounded-full overflow-hidden ring-1 ring-dugout-gold/40 hover-lift">
-              <img src="/logo.jpg" alt="DUGHOLE" className="h-full w-full object-cover" draggable={false} />
+              <img src="/logo.jpg" alt="DUGOUT" className="h-full w-full object-cover" draggable={false} />
             </span>
             <span className="font-display text-white text-3xl tracking-[0.18em]">
               <LetterWave text="DUGOUT" glow="gold" charDelay={20} liftPx={5} />
@@ -573,7 +573,7 @@ function SiteFooter() {
           <div className="flex items-center gap-4">
             <img
               src="/logo.jpg"
-              alt="DUGHOLE"
+              alt="DUGOUT"
               className="h-20 w-20 rounded-2xl object-cover ring-1 ring-dugout-gold/30 hover-lift"
               draggable={false}
             />

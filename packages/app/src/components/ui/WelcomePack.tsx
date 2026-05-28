@@ -198,11 +198,11 @@ function PackReveal({
               />
               {/* Inner panel */}
               <div className="absolute inset-3 rounded-2xl border border-dugout-black/40 flex flex-col items-center justify-between py-6 px-4 bg-gradient-to-b from-black/10 via-transparent to-black/30">
-                <div className="font-mono text-[10px] tracking-[0.3em] text-dugout-black/80 uppercase">DUGHOLE · WC26</div>
+                <div className="font-mono text-[10px] tracking-[0.3em] text-dugout-black/80 uppercase">DUGOUT · WC26</div>
                 <div className="flex flex-col items-center gap-3">
                   <img
                     src="/logo.jpg"
-                    alt="DUGHOLE"
+                    alt="DUGOUT"
                     className="h-24 w-24 rounded-xl object-cover ring-2 ring-dugout-black/30"
                     draggable={false}
                   />

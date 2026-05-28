@@ -6,6 +6,7 @@ import { isMuted } from "@/lib/sounds";
 const PLAYLIST = [
   { src: "/music/symphony.mp3",   title: "Symphony — Clean Bandit" },
   { src: "/music/tv-off.mp3",     title: "TV Off — Kendrick Lamar" },
+  { src: "/music/stir-fry.mp3",   title: "Stir Fry — Migos" },
   { src: "/music/hayya-hayya.mp3", title: "Hayya Hayya — WC 2022" },
 ];
 

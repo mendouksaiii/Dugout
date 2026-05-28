@@ -20,4 +20,6 @@ export const FOOTBALL_IMAGERY = {
     "https://images.unsplash.com/photo-1602674809970-89077837b6fa?w=1920&q=80&auto=format&fit=crop",
   goldenHour:
     "https://images.unsplash.com/photo-1431324155629-1a6deb1dec8d?w=1920&q=80&auto=format&fit=crop",
+  // Local — cosmic floating stadium used for Manager HQ (/play)
+  cosmicStadium: "/cosmic-stadium.jpg",
 };
