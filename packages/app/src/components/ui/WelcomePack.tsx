@@ -6,35 +6,12 @@ import playersData from "@/data/players.json";
 import { Player } from "@/types";
 import { PlayerCard } from "@/components/ui/PlayerCard";
 import { playCoin, playLevelUp, playSuccess, playWhistle, unlockAudio } from "@/lib/sounds";
+import { pickRandomStarterFive, setStarterIds, type Rarity } from "@/lib/userRoster";
 
 const players = playersData as Player[];
 
-type Rarity = "BRONZE" | "SILVER";
-
-// Pick 5 low-tier players: ratings 70–84 (BRONZE / SILVER tier in this game).
-function pickStarterFive(): { player: Player; rarity: Rarity }[] {
-  const pool = players.filter((p) => p.rating >= 70 && p.rating <= 84);
-  const shuffled = [...pool].sort(() => Math.random() - 0.5);
-  // Ensure at least one of each common position (GK, DEF, MID, FWD)
-  const byPos: Record<string, Player[]> = { GK: [], DEF: [], MID: [], FWD: [] };
-  shuffled.forEach((p) => byPos[p.position]?.push(p));
-  const picked: Player[] = [
-    byPos.GK[0],
-    byPos.DEF[0],
-    byPos.DEF[1] ?? byPos.MID[0],
-    byPos.MID[0] ?? byPos.MID[1],
-    byPos.FWD[0],
-  ].filter(Boolean).slice(0, 5);
-  // Fill the rest randomly if pos shortage
-  while (picked.length < 5 && shuffled.length > picked.length) {
-    const next = shuffled.find((p) => !picked.includes(p));
-    if (!next) break;
-    picked.push(next);
-  }
-  return picked.map((p) => ({
-    player: p,
-    rarity: p.rating >= 80 ? "SILVER" : "BRONZE",
-  }));
+function pickStarterFive() {
+  return pickRandomStarterFive(players);
 }
 
 const STORAGE_PREFIX = "dugout_pack_claimed_";
@@ -49,8 +26,10 @@ export function WelcomePack() {
     const key = STORAGE_PREFIX + address.toLowerCase();
     if (localStorage.getItem(key)) return;
     // First-time connect for this address — give them a pack
-    setCards(pickStarterFive());
+    const picked = pickStarterFive();
+    setCards(picked);
     setOpen(true);
+    setStarterIds(address.toLowerCase(), picked.map((c) => c.player.id));
     localStorage.setItem(key, String(Date.now()));
   }, [isConnected, address]);
 

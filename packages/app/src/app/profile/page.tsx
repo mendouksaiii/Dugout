@@ -1,8 +1,19 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState, useEffect } from "react";
 import { useAccount, useReadContract, useReadContracts } from "wagmi";
 import { formatEther, zeroAddress, type Address } from "viem";
+import {
+  getStarterIds,
+  readPoints,
+  readUpgrades,
+  syncPointsFromRecord,
+  upgradePlayer,
+  effectiveRating,
+  UPGRADE_COST,
+  MAX_UPGRADES,
+} from "@/lib/userRoster";
+import { PLAYER_MINT_ABI } from "@/lib/contracts";
 import Link from "next/link";
 import { Navbar } from "@/components/layout/Navbar";
 import { Backdrop } from "@/components/ui/Backdrop";
@@ -140,6 +151,69 @@ export default function ProfilePage() {
   const total = winsN + lossN;
   const winRate = total === 0 ? 0 : Math.round((winsN / total) * 100);
 
+  // ─── Points wallet — synced from W/L ─────────────────────────────────────
+  const addressLower = address?.toLowerCase() ?? "";
+  const [points, setPoints] = useState(0);
+  const [upgrades, setUpgrades] = useState<Record<string, number>>({});
+  useEffect(() => {
+    if (!addressLower) return;
+    setPoints(syncPointsFromRecord(addressLower, winsN, lossN));
+    setUpgrades(readUpgrades(addressLower));
+  }, [addressLower, winsN, lossN]);
+
+  function doUpgrade(playerId: string) {
+    if (!addressLower) return;
+    const r = upgradePlayer(addressLower, playerId);
+    if (!r.ok) return;
+    setPoints(r.points ?? readPoints(addressLower));
+    setUpgrades(readUpgrades(addressLower));
+  }
+
+  // ─── Owned roster (starter pack + minted via PlayerMint) ──────────────────
+  const [starterIdsState, setStarterIdsState] = useState<string[]>([]);
+  useEffect(() => {
+    if (!addressLower) return;
+    setStarterIdsState(getStarterIds(addressLower));
+  }, [addressLower]);
+  const { data: playerMintTokens } = useReadContract({
+    address: CONTRACT_ADDRESSES.playerMint,
+    abi: PLAYER_MINT_ABI,
+    functionName: "tokensOf",
+    args: address ? [address] : undefined,
+    query: { enabled: !!address && hasContracts },
+  });
+  const tokenInfoCalls = useMemo(() => {
+    if (!playerMintTokens) return [];
+    return (playerMintTokens as readonly bigint[]).map((tid) => ({
+      address: CONTRACT_ADDRESSES.playerMint,
+      abi: PLAYER_MINT_ABI,
+      functionName: "tokenInfo" as const,
+      args: [tid] as const,
+    }));
+  }, [playerMintTokens]);
+  const { data: tokenInfos } = useReadContracts({
+    contracts: tokenInfoCalls,
+    query: { enabled: tokenInfoCalls.length > 0 },
+  });
+  const mintedIds = useMemo(() => {
+    if (!tokenInfos) return [];
+    const ids: string[] = [];
+    tokenInfos.forEach((r) => {
+      if (r.status === "success") {
+        const info = r.result as unknown as { playerId: string };
+        if (info?.playerId) ids.push(info.playerId);
+      }
+    });
+    return ids;
+  }, [tokenInfos]);
+  const ownedRoster = useMemo(() => {
+    const set = new Set<string>([...starterIdsState, ...mintedIds]);
+    return Array.from(set)
+      .map((id) => players.find((p) => p.id === id))
+      .filter((p) => !!p)
+      .map((p) => p!);
+  }, [starterIdsState, mintedIds]);
+
   // Compute net OKB profit across resolved wars
   const profitOKB = useMemo(() => {
     return myWars.reduce((acc, w) => {
@@ -258,6 +332,95 @@ export default function ProfilePage() {
                     {cards.length === 0 && squadTokens && (squadTokens as readonly bigint[]).length > 0 && Array.from({ length: 5 }).map((_, i) => (
                       <div key={`skel-${i}`} className="w-44 h-60 rounded-xl bg-white/[0.04] animate-pulse" />
                     ))}
+                  </div>
+                )}
+              </section>
+
+              {/* MANAGER POINTS — earned per result, spent on player upgrades */}
+              <section className="mt-20">
+                <SectionHead
+                  eyebrow="Manager points"
+                  title={<>Upgrade your <span className="text-dugout-electric">five.</span></>}
+                  right={
+                    <div className="flex items-center gap-4">
+                      <div className="text-right">
+                        <div className="font-mono text-[10px] tracking-[0.22em] text-white/40 uppercase">Balance</div>
+                        <div className="font-display text-3xl text-dugout-electric tabular-nums leading-none" style={{ textShadow: "0 0 18px rgba(0,255,135,0.35)" }}>
+                          {points}
+                        </div>
+                      </div>
+                      <div className="font-mono text-[10px] tracking-[0.18em] text-white/30 uppercase max-w-[14ch] leading-relaxed text-right hidden sm:block">
+                        +50 per win<br/>+15 draw<br/>+5 loss
+                      </div>
+                    </div>
+                  }
+                />
+
+                {ownedRoster.length === 0 ? (
+                  <div className="mt-8 rounded-[2rem] p-1.5 bg-white/[0.04] hairline-strong">
+                    <div className="rounded-[calc(2rem-0.375rem)] bg-dugout-surface/60 hairline inner-glow p-10 text-center">
+                      <div className="font-display text-2xl text-white">No players yet — head to Manager HQ to open your starter pack.</div>
+                      <Link href="/play" className="mt-4 inline-flex items-center gap-2 rounded-full bg-dugout-electric pl-5 pr-2 py-2 text-dugout-black hover:brightness-110 transition-transform duration-150 ease-out-strong active:scale-[0.97]">
+                        <span className="font-display text-sm tracking-wider">OPEN PACK</span>
+                        <span className="flex h-7 w-7 items-center justify-center rounded-full bg-dugout-black/15"><Arrow /></span>
+                      </Link>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-8 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {ownedRoster.map((p, i) => {
+                      const lv = upgrades[p.id] ?? 0;
+                      const eff = effectiveRating(p, upgrades);
+                      const canAfford = points >= UPGRADE_COST;
+                      const maxed = lv >= MAX_UPGRADES;
+                      return (
+                        <div
+                          key={p.id}
+                          className="reveal rounded-2xl p-[1.5px] bg-gradient-to-br from-dugout-electric/30 via-white/5 to-transparent hover-lift"
+                          style={{ ["--stagger-delay" as any]: `${i * 60}ms` }}
+                        >
+                          <div className="rounded-[calc(1rem-1.5px)] bg-dugout-surface/70 hairline inner-glow p-4 flex items-center gap-4">
+                            <img
+                              src={`/players/${p.id}.png`}
+                              alt=""
+                              className="h-14 w-14 rounded-full object-cover bg-dugout-pitch ring-1 ring-dugout-gold/30"
+                              draggable={false}
+                              onError={(e) => { (e.target as HTMLImageElement).style.opacity = "0.2"; }}
+                            />
+                            <div className="flex-1 min-w-0">
+                              <div className="font-display text-lg text-white leading-none">{p.shortName}</div>
+                              <div className="font-mono text-[10px] tracking-[0.18em] text-white/40 uppercase mt-1">
+                                {p.position} · <span className="text-dugout-gold">{p.nation}</span>
+                              </div>
+                              <div className="mt-2 flex items-center gap-2 font-mono text-[11px]">
+                                <span className="tabular-nums text-white/55">{p.rating}</span>
+                                <span className="text-dugout-electric">→</span>
+                                <span className="font-display text-xl tabular-nums text-dugout-electric leading-none">{eff}</span>
+                                {lv > 0 && (
+                                  <span className="rounded-full bg-dugout-electric/15 px-1.5 py-0.5 text-[9px] tracking-[0.22em] uppercase text-dugout-electric">
+                                    +{lv}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                            <button
+                              onClick={() => doUpgrade(p.id)}
+                              disabled={!canAfford || maxed}
+                              className={`shrink-0 rounded-full px-4 py-2 font-display text-sm tracking-wider transition-transform duration-150 ease-out-strong active:scale-95 ${
+                                maxed
+                                  ? "bg-dugout-gold/20 text-dugout-gold/60 cursor-default"
+                                  : canAfford
+                                    ? "bg-dugout-electric text-dugout-black hover:brightness-110"
+                                    : "bg-white/5 text-white/30 cursor-not-allowed"
+                              }`}
+                              title={maxed ? "Max level" : canAfford ? `Spend ${UPGRADE_COST} pts` : `Need ${UPGRADE_COST} pts`}
+                            >
+                              {maxed ? "MAX" : `+1 · ${UPGRADE_COST}p`}
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 )}
               </section>

@@ -2,7 +2,8 @@
 
 import { useMemo, useState, useEffect, useRef } from "react";
 import { consumePitchEntry, playCrowd } from "@/lib/sounds";
-import { useAccount, useReadContract, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import { useAccount, useReadContract, useReadContracts, useWriteContract, useWaitForTransactionReceipt } from "wagmi";
+import { zeroAddress } from "viem";
 import Link from "next/link";
 import { Navbar } from "@/components/layout/Navbar";
 import { PlayerCard } from "@/components/ui/PlayerCard";
@@ -17,11 +18,14 @@ import { Player, Position } from "@/types";
 import {
   CONTRACT_ADDRESSES,
   DUGOUT_NFT_ABI,
+  PLAYER_MINT_ABI,
   POSITION_NUM,
 } from "@/lib/contracts";
+import { getStarterIds } from "@/lib/userRoster";
 
 const players = playersData as Player[];
 const POSITIONS: Position[] = ["GK", "DEF", "MID", "FWD", "FLEX"];
+const hasContracts = CONTRACT_ADDRESSES.squadWars !== zeroAddress;
 
 type Slot = { player: Player | null };
 
@@ -38,8 +42,63 @@ export default function SquadBuilderPage() {
     }
   }, []);
 
+  // ─── Owned roster ─────────────────────────────────────────────────────
+  // Union of (a) starter-pack picks saved in localStorage and (b) the user's
+  // PlayerMint NFTs on chain. This is the ONLY pool the user picks from now.
+  const addressLower = address?.toLowerCase() ?? "";
+  const [starterIds, setStarterIdsState] = useState<string[]>([]);
+  useEffect(() => {
+    if (!addressLower) { setStarterIdsState([]); return; }
+    setStarterIdsState(getStarterIds(addressLower));
+    // Re-read whenever localStorage may have updated (pack just claimed)
+    const i = setInterval(() => setStarterIdsState(getStarterIds(addressLower)), 1500);
+    return () => clearInterval(i);
+  }, [addressLower]);
+
+  // Read PlayerMint tokenIds owned by the user
+  const { data: playerMintTokens } = useReadContract({
+    address: CONTRACT_ADDRESSES.playerMint,
+    abi: PLAYER_MINT_ABI,
+    functionName: "tokensOf",
+    args: address ? [address] : undefined,
+    query: { enabled: !!address && hasContracts },
+  });
+  // Batch-fetch tokenInfo for each
+  const tokenInfoCalls = useMemo(() => {
+    if (!playerMintTokens) return [];
+    return (playerMintTokens as readonly bigint[]).map((tid) => ({
+      address: CONTRACT_ADDRESSES.playerMint,
+      abi: PLAYER_MINT_ABI,
+      functionName: "tokenInfo" as const,
+      args: [tid] as const,
+    }));
+  }, [playerMintTokens]);
+  const { data: tokenInfos } = useReadContracts({
+    contracts: tokenInfoCalls,
+    query: { enabled: tokenInfoCalls.length > 0 },
+  });
+  const mintedIds = useMemo(() => {
+    if (!tokenInfos) return [];
+    const ids: string[] = [];
+    tokenInfos.forEach((r) => {
+      if (r.status === "success") {
+        const info = r.result as unknown as { playerId: string };
+        if (info?.playerId) ids.push(info.playerId);
+      }
+    });
+    return ids;
+  }, [tokenInfos]);
+
+  // Owned roster = unique union of starter + minted, mapped to Player records
+  const ownedRoster = useMemo<Player[]>(() => {
+    const set = new Set<string>([...starterIds, ...mintedIds]);
+    return Array.from(set)
+      .map((id) => players.find((p) => p.id === id))
+      .filter((p): p is Player => !!p);
+  }, [starterIds, mintedIds]);
+
   const filtered = useMemo(() => {
-    return players.filter((p) => {
+    return ownedRoster.filter((p) => {
       const matchesPos = filter === "ALL" || p.position === filter;
       const matchesSearch =
         search.length === 0 ||
@@ -47,7 +106,7 @@ export default function SquadBuilderPage() {
         p.nation.toLowerCase().includes(search.toLowerCase());
       return matchesPos && matchesSearch;
     });
-  }, [filter, search]);
+  }, [ownedRoster, filter, search]);
 
   // Already-minted check
   const { data: hasMinted } = useReadContract({
@@ -386,34 +445,69 @@ export default function SquadBuilderPage() {
                   </div>
                 </div>
 
-                {/* Player grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                  {filtered.map((p, i) => {
-                    const selected = isInSquad(p.id);
-                    const flying = flightId === p.id;
-                    return (
-                      <div
-                        key={p.id}
-                        className={`reveal flex justify-center ${flying ? "animate-card-flight" : ""}`}
-                        style={{ ["--stagger-delay" as any]: `${Math.min(i * 18, 360)}ms` }}
-                      >
-                        <PlayerCard
-                          player={p}
-                          rarity="BRONZE"
-                          size="sm"
-                          selected={selected}
-                          onClick={() => pickPlayer(p)}
-                        />
-                      </div>
-                    );
-                  })}
-
-                  {filtered.length === 0 && (
-                    <div className="col-span-full text-center py-16 text-white/40 font-mono text-sm">
-                      No players match — clear filters.
-                    </div>
+                {/* Your owned roster — chip row */}
+                <div className="mb-3 inline-flex items-center gap-2 rounded-full bg-white/[0.04] hairline px-3 py-1">
+                  <span className="font-mono text-[10px] tracking-[0.22em] text-white/55 uppercase">
+                    Your roster · {ownedRoster.length} owned
+                  </span>
+                  {starterIds.length > 0 && (
+                    <span className="font-mono text-[9px] tracking-[0.2em] rounded-full bg-dugout-electric/15 text-dugout-electric px-2 py-0.5 uppercase">
+                      {starterIds.length} pack
+                    </span>
+                  )}
+                  {mintedIds.length > 0 && (
+                    <span className="font-mono text-[9px] tracking-[0.2em] rounded-full bg-dugout-gold/15 text-dugout-gold px-2 py-0.5 uppercase">
+                      {mintedIds.length} minted
+                    </span>
                   )}
                 </div>
+
+                {/* EMPTY ROSTER STATES */}
+                {ownedRoster.length === 0 ? (
+                  <EmptyRoster connected={isConnected} />
+                ) : ownedRoster.length < 5 ? (
+                  /* Not enough to mint yet — encourage marketplace */
+                  <>
+                    <NotEnoughPanel owned={ownedRoster.length} />
+                    {/* Still show what they DO have so they can familiarize */}
+                    <div className="mt-6 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3 opacity-90">
+                      {filtered.map((p, i) => (
+                        <div key={p.id} className="reveal flex justify-center" style={{ ["--stagger-delay" as any]: `${Math.min(i * 18, 360)}ms` }}>
+                          <PlayerCard player={p} rarity="BRONZE" size="sm" onClick={() => {}} />
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                ) : (
+                  /* Player grid — pickable */
+                  <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                    {filtered.map((p, i) => {
+                      const selected = isInSquad(p.id);
+                      const flying = flightId === p.id;
+                      return (
+                        <div
+                          key={p.id}
+                          className={`reveal flex justify-center ${flying ? "animate-card-flight" : ""}`}
+                          style={{ ["--stagger-delay" as any]: `${Math.min(i * 18, 360)}ms` }}
+                        >
+                          <PlayerCard
+                            player={p}
+                            rarity="BRONZE"
+                            size="sm"
+                            selected={selected}
+                            onClick={() => pickPlayer(p)}
+                          />
+                        </div>
+                      );
+                    })}
+
+                    {filtered.length === 0 && (
+                      <div className="col-span-full text-center py-16 text-white/40 font-mono text-sm">
+                        No owned players match — clear filters.
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -524,6 +618,62 @@ function AlreadyMintedPanel() {
                 <path d="M7 17L17 7M17 7H8M17 7V16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
               </svg>
             </span>
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function EmptyRoster({ connected }: { connected: boolean }) {
+  return (
+    <div className="rounded-[2rem] p-1.5 bg-white/[0.04] hairline-strong">
+      <div className="rounded-[calc(2rem-0.375rem)] bg-dugout-surface/60 hairline inner-glow p-10 text-center">
+        <div className="font-mono text-[10px] tracking-[0.32em] text-dugout-electric uppercase mb-2">
+          {connected ? "★ NO PLAYERS YET ★" : "★ CONNECT TO START ★"}
+        </div>
+        <h2 className="font-display text-white text-4xl sm:text-5xl leading-tight">
+          {connected ? <>Claim your <span className="text-dugout-electric">free starter pack.</span></> : <>Connect a wallet to play.</>}
+        </h2>
+        <p className="mt-3 text-white/55 max-w-md mx-auto text-sm">
+          {connected
+            ? "Head to Manager HQ — your first 5 low-tier players drop the moment you arrive."
+            : "Every wallet gets a free starter pack with 5 players. After that, you mint individuals from the marketplace."}
+        </p>
+        <div className="mt-7 flex flex-wrap items-center justify-center gap-3">
+          {connected ? (
+            <Link href="/play" className="group inline-flex items-center gap-2 rounded-full bg-dugout-electric pl-6 pr-2 py-2.5 text-dugout-black hover:brightness-110 transition-transform duration-150 ease-out-strong active:scale-[0.97] animate-hot-edge">
+              <span className="font-display text-base tracking-wider">OPEN MY PACK</span>
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-dugout-black/15">
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none"><path d="M7 17L17 7M17 7H8M17 7V16" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              </span>
+            </Link>
+          ) : (
+            <ConnectButton />
+          )}
+          <Link href="/marketplace" className="font-mono text-[11px] tracking-[0.22em] uppercase text-white/55 hover:text-dugout-gold transition-colors">
+            Browse marketplace →
+          </Link>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function NotEnoughPanel({ owned }: { owned: number }) {
+  return (
+    <div className="rounded-2xl p-[1.5px] bg-gradient-to-br from-dugout-gold/40 via-white/10 to-transparent">
+      <div className="rounded-[calc(1rem-1.5px)] bg-dugout-surface/70 hairline inner-glow p-5">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-dugout-gold/15 text-dugout-gold font-display text-xl">!</span>
+          <div className="flex-1">
+            <div className="font-display text-lg text-white leading-tight">You need 5 to mint your squad</div>
+            <div className="font-mono text-[10px] tracking-[0.2em] text-white/50 uppercase mt-1">
+              You own <span className="text-dugout-electric">{owned}</span> / 5 — pick up more in the marketplace.
+            </div>
+          </div>
+          <Link href="/marketplace" className="rounded-full bg-dugout-gold px-4 py-2 text-dugout-black font-display text-sm tracking-wider transition-transform duration-150 ease-out-strong active:scale-[0.97] hover:bg-dugout-gold-light">
+            MARKET →
           </Link>
         </div>
       </div>
