@@ -1,12 +1,23 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useAccount } from "wagmi";
 import Link from "next/link";
 import { Navbar } from "@/components/layout/Navbar";
 import { Backdrop } from "@/components/ui/Backdrop";
 import { HoverWord, LetterWave } from "@/components/ui/HoverText";
 import { RelatedLinks } from "@/components/ui/RelatedLinks";
 import { FOOTBALL_IMAGERY } from "@/lib/imagery";
+import {
+  readBankroll,
+  readBets,
+  placeBet,
+  payoutFor,
+  resetBankroll,
+  STARTING_BANKROLL,
+  type DemoBet,
+} from "@/lib/predictBets";
+import { playClick, playCoin, playFail, playSuccess, unlockAudio } from "@/lib/sounds";
 
 // ─── Mock market data ─────────────────────────────────────────────────────────
 const TOURNAMENT_OPENS = new Date("2026-06-11T20:00:00Z"); // World Cup 2026 opening match
@@ -124,6 +135,61 @@ function useCountdown(target: Date) {
 // ─── PAGE ────────────────────────────────────────────────────────────────────
 export default function PredictPage() {
   const c = useCountdown(TOURNAMENT_OPENS);
+  const { address } = useAccount();
+  const addressLower = address?.toLowerCase() ?? "";
+
+  // ─── Demo bankroll + bets (localStorage) ─────────────────────────────
+  const [bankroll, setBankroll] = useState(STARTING_BANKROLL);
+  const [bets, setBets] = useState<DemoBet[]>([]);
+  useEffect(() => {
+    setBankroll(readBankroll(addressLower));
+    setBets(readBets(addressLower));
+  }, [addressLower]);
+
+  // ─── Bet modal state ─────────────────────────────────────────────────
+  const [modalOpen, setModalOpen] = useState(false);
+  const [modalCtx, setModalCtx] = useState<{
+    marketId: string;
+    marketName: string;
+    optionLabel: string;
+    oddsPct: number;
+  } | null>(null);
+
+  function openBetModal(ctx: {
+    marketId: string;
+    marketName: string;
+    optionLabel: string;
+    oddsPct: number;
+  }) {
+    unlockAudio().catch(() => {});
+    playClick();
+    setModalCtx(ctx);
+    setModalOpen(true);
+  }
+
+  function handlePlace(stake: number) {
+    if (!modalCtx) return;
+    const r = placeBet(addressLower, {
+      marketId:    modalCtx.marketId,
+      marketName:  modalCtx.marketName,
+      optionLabel: modalCtx.optionLabel,
+      stake,
+      oddsPct:     modalCtx.oddsPct,
+    });
+    if (!r.ok) { playFail(); return; }
+    playCoin();
+    setBankroll(r.bankroll!);
+    setBets(readBets(addressLower));
+    setModalOpen(false);
+  }
+
+  function handleReset() {
+    if (!confirm("Reset demo bankroll to 100 OKB and clear all bets?")) return;
+    resetBankroll(addressLower);
+    setBankroll(STARTING_BANKROLL);
+    setBets([]);
+    playSuccess();
+  }
 
   return (
     <>
@@ -138,10 +204,10 @@ export default function PredictPage() {
           {/* ─── HEADER ──────────────────────────────────────────────── */}
           <div className="flex flex-wrap items-end justify-between gap-6 mb-10">
             <div>
-              <div className="inline-flex items-center gap-2 rounded-full bg-dugout-gold/15 hairline px-3 py-1 hover-lift">
-                <span className="inline-block h-1.5 w-1.5 rounded-full bg-dugout-gold animate-live-dot" />
-                <span className="font-mono text-[10px] tracking-[0.22em] text-dugout-gold uppercase">
-                  Markets · Locked
+              <div className="inline-flex items-center gap-2 rounded-full bg-dugout-electric/15 hairline px-3 py-1 hover-lift">
+                <span className="inline-block h-1.5 w-1.5 rounded-full bg-dugout-electric animate-live-dot" />
+                <span className="font-mono text-[10px] tracking-[0.22em] text-dugout-electric uppercase">
+                  Testnet · Demo bets open
                 </span>
               </div>
               <h1 className="mt-5 font-display text-white text-7xl sm:text-9xl leading-[0.85]">
@@ -151,36 +217,54 @@ export default function PredictPage() {
                 </span>
               </h1>
               <p className="mt-4 text-white/55 max-w-xl">
-                On-chain prediction markets for every group match, knockout fixture, and tournament-long
-                outright. Resolved by the same Oracle that scores Squad Wars.
+                Demo bets are live now — place a stake on any market with your testnet bankroll.
+                Real on-chain settlement opens at WC kickoff, scored by the same Oracle that
+                resolves Squad Wars.
               </p>
             </div>
 
-            {/* Countdown */}
-            <CountdownPanel c={c} />
+            {/* Bankroll + countdown stacked */}
+            <div className="flex flex-col items-end gap-3">
+              <BankrollPanel bankroll={bankroll} onReset={handleReset} />
+              <CountdownPanel c={c} />
+            </div>
           </div>
 
-          {/* ─── LOCKED NOTICE STRIP ────────────────────────────────── */}
-          <div className="rounded-2xl p-[1.5px] bg-gradient-to-r from-dugout-gold/40 via-white/10 to-dugout-electric/30 mb-14">
+          {/* ─── DEMO-MODE STRIP ──────────────────────────────────────── */}
+          <div className="rounded-2xl p-[1.5px] bg-gradient-to-r from-dugout-electric/40 via-white/10 to-dugout-gold/30 mb-14">
             <div className="rounded-[calc(1rem-1.5px)] bg-dugout-surface/80 backdrop-blur-sm hairline inner-glow px-5 py-4 flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-3">
-                <LockIcon />
+                <SparkIcon />
                 <div>
-                  <div className="font-display text-lg text-white leading-none">Markets open at kickoff.</div>
-                  <div className="font-mono text-[10px] tracking-[0.22em] text-white/45 uppercase mt-1">
-                    Mexico vs Saudi Arabia · June 11 · Estadio Azteca
+                  <div className="font-display text-lg text-white leading-none">Testnet demo · play before kickoff.</div>
+                  <div className="font-mono text-[10px] tracking-[0.22em] text-white/55 uppercase mt-1">
+                    100 OKB starting bankroll · all bets settle on-chain once WC 2026 begins
                   </div>
                 </div>
               </div>
-              <button
-                disabled
-                className="inline-flex items-center gap-2 rounded-full bg-white/[0.06] hairline px-4 py-2 font-mono text-[11px] tracking-[0.22em] text-white/60 uppercase cursor-not-allowed"
-              >
-                <BellIcon />
-                Notify me on open
-              </button>
+              <div className="font-mono text-[10px] tracking-[0.22em] text-dugout-electric uppercase">
+                ● {bets.length} active demo bet{bets.length === 1 ? "" : "s"}
+              </div>
             </div>
           </div>
+
+          {/* ─── MY BETS (only when bets exist) ─────────────────────── */}
+          {bets.length > 0 && (
+            <section className="mb-14">
+              <SectionHead
+                eyebrow={<><span className="text-dugout-electric">●</span> YOUR DEMO BETS · {bets.length}</>}
+                title={<>Open <span className="text-dugout-electric">positions.</span></>}
+                right={<div className="font-mono text-[10px] tracking-[0.22em] text-white/40 uppercase">Settle at kickoff</div>}
+              />
+              <div className="mt-6 rounded-[2rem] p-1.5 bg-white/[0.04] hairline-strong">
+                <div className="rounded-[calc(2rem-0.375rem)] bg-dugout-surface/60 hairline inner-glow overflow-hidden">
+                  {bets.map((b, i) => (
+                    <MyBetRow key={b.id} bet={b} isLast={i === bets.length - 1} />
+                  ))}
+                </div>
+              </div>
+            </section>
+          )}
 
           {/* ─── FEATURED OUTRIGHTS ─────────────────────────────────── */}
           <section>
@@ -192,7 +276,7 @@ export default function PredictPage() {
             <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-4">
               {OUTRIGHTS.map((m, i) => (
                 <div key={m.id} className="reveal" style={{ ["--stagger-delay" as any]: `${i * 80}ms` }}>
-                  <OutrightCard market={m} />
+                  <OutrightCard market={m} onPick={(opt) => openBetModal({ marketId: m.id, marketName: m.question, optionLabel: opt.label, oddsPct: opt.pct })} />
                 </div>
               ))}
             </div>
@@ -208,7 +292,7 @@ export default function PredictPage() {
             <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-3">
               {GROUP_MATCHES.map((m, i) => (
                 <div key={`${m.group}-${m.home.name}`} className="reveal" style={{ ["--stagger-delay" as any]: `${i * 50}ms` }}>
-                  <MatchCard match={m} />
+                  <MatchCard match={m} onPickHome={() => openBetModal({ marketId: `md1-${m.group}-home`, marketName: `${m.home.name} vs ${m.away.name}`, optionLabel: m.home.name, oddsPct: m.home.odds })} onPickDraw={() => openBetModal({ marketId: `md1-${m.group}-draw`, marketName: `${m.home.name} vs ${m.away.name}`, optionLabel: "Draw", oddsPct: m.draw })} onPickAway={() => openBetModal({ marketId: `md1-${m.group}-away`, marketName: `${m.home.name} vs ${m.away.name}`, optionLabel: m.away.name, oddsPct: m.away.odds })} />
                 </div>
               ))}
             </div>
@@ -224,7 +308,7 @@ export default function PredictPage() {
             <div className="mt-10 grid grid-cols-1 md:grid-cols-2 gap-3">
               {NOVELTY.map((n, i) => (
                 <div key={i} className="reveal" style={{ ["--stagger-delay" as any]: `${i * 60}ms` }}>
-                  <NoveltyCard {...n} />
+                  <NoveltyCard {...n} onYes={() => openBetModal({ marketId: `nov-${i}`, marketName: n.question, optionLabel: "YES", oddsPct: n.yes })} onNo={() => openBetModal({ marketId: `nov-${i}`, marketName: n.question, optionLabel: "NO", oddsPct: 100 - n.yes })} />
                 </div>
               ))}
             </div>
@@ -258,6 +342,15 @@ export default function PredictPage() {
 
           <RelatedLinks current="/predict" />
         </div>
+
+        {modalOpen && modalCtx && (
+          <BetModal
+            ctx={modalCtx}
+            bankroll={bankroll}
+            onClose={() => setModalOpen(false)}
+            onPlace={handlePlace}
+          />
+        )}
       </main>
     </>
   );
@@ -302,20 +395,11 @@ function Sep() {
   return <span className="font-display text-3xl text-white/20 leading-none">:</span>;
 }
 
-function OutrightCard({ market }: { market: Outright }) {
+function OutrightCard({ market, onPick }: { market: Outright; onPick: (o: Outright["options"][number]) => void }) {
   const top = [...market.options].sort((a, b) => b.pct - a.pct)[0];
 
   return (
     <div className="group relative rounded-2xl p-[1.5px] bg-white/[0.04] hairline-strong hover-lift overflow-hidden">
-      {/* Lock blur overlay */}
-      <div className="absolute inset-0 pointer-events-none z-10 backdrop-blur-[1.5px] bg-dugout-black/10" />
-      <div className="absolute inset-0 pointer-events-none z-20 flex items-start justify-end p-3">
-        <div className="rounded-full bg-dugout-black/70 backdrop-blur px-2 py-1 inline-flex items-center gap-1.5 ring-1 ring-white/10">
-          <LockIcon size={10} />
-          <span className="font-mono text-[9px] tracking-[0.2em] text-white/60 uppercase">Locked</span>
-        </div>
-      </div>
-
       <div className="rounded-[calc(1rem-1.5px)] bg-dugout-surface/70 hairline inner-glow p-6 relative">
         {/* Head */}
         <div className="flex items-start justify-between mb-5">
@@ -336,9 +420,10 @@ function OutrightCard({ market }: { market: Outright }) {
           {market.options.map((o) => {
             const isLeader = o.label === top.label;
             return (
-              <div
+              <button
                 key={o.label}
-                className={`relative rounded-lg px-3 py-2.5 overflow-hidden transition-colors duration-200
+                onClick={() => onPick(o)}
+                className={`group/opt relative w-full text-left rounded-lg px-3 py-2.5 overflow-hidden transition-all duration-200 active:scale-[0.99] cursor-pointer hover:ring-1 hover:ring-dugout-electric/40
                   ${isLeader ? "bg-dugout-gold/10" : "bg-white/[0.03]"}`}
               >
                 {/* Progress fill */}
@@ -351,16 +436,19 @@ function OutrightCard({ market }: { market: Outright }) {
                       : "linear-gradient(to right, rgba(255,255,255,0.06), rgba(255,255,255,0.01))",
                   }}
                 />
-                <div className="relative flex items-center justify-between">
+                <div className="relative flex items-center justify-between gap-2">
                   <span className="text-sm text-white/90 flex items-center gap-2">
                     {o.flag && <span aria-hidden>{o.flag}</span>}
                     <HoverWord glow={isLeader ? "gold" : "white"}>{o.label}</HoverWord>
                   </span>
-                  <span className={`font-display text-lg tabular-nums tracking-tight ${isLeader ? "text-dugout-gold" : "text-white/75"}`}>
-                    {o.pct}%
+                  <span className="flex items-center gap-3">
+                    <span className="font-mono text-[10px] tracking-[0.2em] uppercase text-dugout-electric/0 group-hover/opt:text-dugout-electric transition-colors duration-150">bet →</span>
+                    <span className={`font-display text-lg tabular-nums tracking-tight ${isLeader ? "text-dugout-gold" : "text-white/75"}`}>
+                      {o.pct}%
+                    </span>
                   </span>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -369,71 +457,62 @@ function OutrightCard({ market }: { market: Outright }) {
   );
 }
 
-function MatchCard({ match: m }: { match: GroupMatch }) {
+function MatchCard({ match: m, onPickHome, onPickDraw, onPickAway }: { match: GroupMatch; onPickHome: () => void; onPickDraw: () => void; onPickAway: () => void }) {
   return (
     <div className="group relative rounded-2xl p-[1.5px] bg-white/[0.04] hairline-strong hover-lift overflow-hidden">
-      {/* Lock layer */}
-      <div className="absolute inset-0 pointer-events-none z-10 backdrop-blur-[1.5px] bg-dugout-black/10" />
-
-      <div className="relative rounded-[calc(1rem-1.5px)] bg-dugout-surface/70 hairline inner-glow px-5 py-4 grid grid-cols-12 gap-3 items-center">
-        {/* MD/group */}
-        <div className="col-span-2 sm:col-span-1">
-          <div className="font-mono text-[8px] tracking-[0.22em] text-white/40 uppercase">Grp</div>
-          <div className="font-display text-2xl text-dugout-gold leading-none">{m.group}</div>
-        </div>
-
-        {/* Home */}
-        <div className="col-span-3 text-right">
-          <div className="font-mono text-[8px] tracking-[0.22em] text-white/40 uppercase">{m.home.odds}%</div>
-          <div className="font-display text-lg text-white leading-tight">{m.home.flag} {m.home.name}</div>
-        </div>
-
-        {/* vs */}
-        <div className="col-span-2 sm:col-span-2 text-center">
-          <div className="font-mono text-[8px] tracking-[0.22em] text-white/30 uppercase">vs</div>
-          <div className="font-mono text-[10px] tracking-[0.15em] text-white/55 mt-1">{m.date}</div>
-        </div>
-
-        {/* Away */}
-        <div className="col-span-3">
-          <div className="font-mono text-[8px] tracking-[0.22em] text-white/40 uppercase">{m.away.odds}%</div>
-          <div className="font-display text-lg text-white leading-tight">{m.away.flag} {m.away.name}</div>
-        </div>
-
-        {/* Draw + lock */}
-        <div className="col-span-2 sm:col-span-3 flex items-center justify-end gap-3">
-          <div className="text-right">
-            <div className="font-mono text-[8px] tracking-[0.22em] text-white/40 uppercase">Draw</div>
-            <div className="font-display text-base text-white/70 tabular-nums leading-none">{m.draw}%</div>
+      <div className="relative rounded-[calc(1rem-1.5px)] bg-dugout-surface/70 hairline inner-glow px-5 py-4">
+        {/* Top row — group + date */}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-3">
+            <span className="font-mono text-[8px] tracking-[0.22em] text-white/40 uppercase">Grp</span>
+            <span className="font-display text-2xl text-dugout-gold leading-none">{m.group}</span>
           </div>
-          <button
-            disabled
-            className="inline-flex items-center gap-1.5 rounded-full bg-white/[0.04] hairline px-3 py-1.5 cursor-not-allowed"
-          >
-            <LockIcon size={10} />
-            <span className="font-mono text-[9px] tracking-[0.22em] text-white/45 uppercase">Locked</span>
-          </button>
+          <div className="font-mono text-[10px] tracking-[0.18em] text-white/55 uppercase">{m.date}</div>
+        </div>
+
+        {/* Three pick buttons — Home / Draw / Away */}
+        <div className="grid grid-cols-3 gap-2">
+          <PickTile flag={m.home.flag} label={m.home.name} pct={m.home.odds} onClick={onPickHome} />
+          <PickTile label="Draw" pct={m.draw} onClick={onPickDraw} muted />
+          <PickTile flag={m.away.flag} label={m.away.name} pct={m.away.odds} onClick={onPickAway} />
         </div>
       </div>
     </div>
   );
 }
 
-function NoveltyCard({ question, yes, sub }: { question: string; yes: number; sub: string }) {
+function PickTile({ flag, label, pct, onClick, muted }: { flag?: string; label: string; pct: number; onClick: () => void; muted?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`group/p relative rounded-lg px-3 py-2.5 hairline overflow-hidden text-left transition-all duration-200 active:scale-[0.97] hover:ring-1 hover:ring-dugout-electric/40 ${muted ? "bg-white/[0.025]" : "bg-white/[0.04]"}`}
+    >
+      <div className="absolute inset-y-0 left-0 transition-all duration-700 ease-out-strong"
+        style={{
+          width: `${pct}%`,
+          background: muted ? "linear-gradient(to right, rgba(255,255,255,0.05), transparent)" : "linear-gradient(to right, rgba(0,255,135,0.15), rgba(0,255,135,0.02))",
+        }} />
+      <div className="relative">
+        <div className="font-mono text-[8px] tracking-[0.22em] text-white/40 uppercase">{pct}%</div>
+        <div className="font-display text-sm text-white leading-tight mt-0.5 truncate">
+          {flag && <span aria-hidden className="mr-1">{flag}</span>}{label}
+        </div>
+        <div className="font-mono text-[8px] tracking-[0.22em] text-dugout-electric/0 group-hover/p:text-dugout-electric mt-0.5 transition-colors">bet →</div>
+      </div>
+    </button>
+  );
+}
+
+function NoveltyCard({ question, yes, sub, onYes, onNo }: { question: string; yes: number; sub: string; onYes: () => void; onNo: () => void }) {
   const no = 100 - yes;
   return (
     <div className="group relative rounded-2xl p-[1.5px] bg-white/[0.04] hairline-strong hover-lift overflow-hidden">
-      <div className="absolute inset-0 pointer-events-none z-10 backdrop-blur-[1.5px] bg-dugout-black/10" />
-
       <div className="relative rounded-[calc(1rem-1.5px)] bg-dugout-surface/70 hairline inner-glow p-5">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <div className="font-display text-xl text-white leading-tight">
-              <HoverWord glow="gold">{question}</HoverWord>
-            </div>
-            <div className="font-mono text-[9px] tracking-[0.18em] text-white/40 uppercase mt-1">{sub}</div>
+        <div>
+          <div className="font-display text-xl text-white leading-tight">
+            <HoverWord glow="gold">{question}</HoverWord>
           </div>
-          <LockIcon size={12} />
+          <div className="font-mono text-[9px] tracking-[0.18em] text-white/40 uppercase mt-1">{sub}</div>
         </div>
 
         {/* YES / NO bar */}
@@ -442,15 +521,27 @@ function NoveltyCard({ question, yes, sub }: { question: string; yes: number; su
           <div className="bg-dugout-red/60" style={{ width: `${no}%` }} />
         </div>
 
-        <div className="mt-2 flex items-center justify-between font-mono text-[11px] tabular-nums">
-          <div className="flex items-center gap-1.5 text-dugout-electric">
-            <span className="h-1.5 w-1.5 rounded-full bg-dugout-electric" />
-            YES <span className="text-white/80">{yes}%</span>
-          </div>
-          <div className="flex items-center gap-1.5 text-dugout-red">
-            NO <span className="text-white/80">{no}%</span>
-            <span className="h-1.5 w-1.5 rounded-full bg-dugout-red" />
-          </div>
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <button onClick={onYes} className="group/y rounded-lg px-3 py-2 bg-dugout-electric/10 hairline hover:bg-dugout-electric/20 transition-colors active:scale-[0.98] text-left">
+            <div className="flex items-center justify-between font-mono text-[11px] tabular-nums">
+              <span className="flex items-center gap-1.5 text-dugout-electric">
+                <span className="h-1.5 w-1.5 rounded-full bg-dugout-electric" />
+                YES
+              </span>
+              <span className="text-white/85">{yes}%</span>
+            </div>
+            <div className="font-mono text-[8px] tracking-[0.22em] text-dugout-electric/60 mt-1 uppercase">bet yes →</div>
+          </button>
+          <button onClick={onNo} className="group/n rounded-lg px-3 py-2 bg-dugout-red/10 hairline hover:bg-dugout-red/20 transition-colors active:scale-[0.98] text-left">
+            <div className="flex items-center justify-between font-mono text-[11px] tabular-nums">
+              <span className="flex items-center gap-1.5 text-dugout-red">
+                <span className="h-1.5 w-1.5 rounded-full bg-dugout-red" />
+                NO
+              </span>
+              <span className="text-white/85">{no}%</span>
+            </div>
+            <div className="font-mono text-[8px] tracking-[0.22em] text-dugout-red/60 mt-1 uppercase">bet no →</div>
+          </button>
         </div>
       </div>
     </div>
@@ -480,6 +571,141 @@ function SectionHead({ eyebrow, title, right }: { eyebrow: React.ReactNode; titl
       </div>
       {right && <div>{right}</div>}
     </div>
+  );
+}
+
+function BankrollPanel({ bankroll, onReset }: { bankroll: number; onReset: () => void }) {
+  return (
+    <div className="rounded-2xl p-[1.5px] bg-gradient-to-br from-dugout-electric/50 via-white/10 to-transparent">
+      <div className="rounded-[calc(1rem-1.5px)] bg-dugout-black/70 backdrop-blur-sm hairline inner-glow px-5 py-3 flex items-center gap-4">
+        <div>
+          <div className="font-mono text-[10px] tracking-[0.22em] text-white/40 uppercase">Demo bankroll</div>
+          <div className="font-display text-4xl text-dugout-electric tabular-nums leading-none mt-1" style={{ textShadow: "0 0 18px rgba(0,255,135,0.45)" }}>
+            {bankroll.toFixed(1)}
+            <span className="font-mono text-[10px] tracking-[0.18em] text-white/40 ml-1.5">OKB</span>
+          </div>
+        </div>
+        <button
+          onClick={onReset}
+          aria-label="Reset bankroll"
+          className="h-8 w-8 rounded-full bg-white/[0.06] hairline flex items-center justify-center text-white/55 hover:text-white hover:bg-white/[0.12] transition-colors active:scale-95"
+          title="Reset to 100 OKB"
+        >
+          <svg width="11" height="11" viewBox="0 0 24 24" fill="none"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v6h6" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MyBetRow({ bet, isLast }: { bet: DemoBet; isLast: boolean }) {
+  const potential = payoutFor(bet.stake, bet.oddsPct);
+  const profit = potential - bet.stake;
+  return (
+    <div className={`grid grid-cols-12 gap-3 px-5 py-4 items-center ${isLast ? "" : "border-b border-white/5"}`}>
+      <div className="col-span-1 inline-flex h-8 w-8 items-center justify-center rounded-full bg-dugout-gold/15 text-dugout-gold font-display text-base">●</div>
+      <div className="col-span-5 sm:col-span-5">
+        <div className="font-mono text-[9px] tracking-[0.2em] text-white/40 uppercase">{bet.marketName.slice(0, 40)}{bet.marketName.length > 40 ? "…" : ""}</div>
+        <div className="font-display text-base text-white truncate">{bet.optionLabel}</div>
+      </div>
+      <div className="col-span-2 text-right">
+        <div className="font-mono text-[9px] tracking-[0.2em] text-white/40 uppercase">Stake</div>
+        <div className="font-display text-base text-white tabular-nums">{bet.stake.toFixed(1)}</div>
+      </div>
+      <div className="col-span-2 text-right">
+        <div className="font-mono text-[9px] tracking-[0.2em] text-white/40 uppercase">Odds</div>
+        <div className="font-display text-base text-dugout-gold tabular-nums">{bet.oddsPct}%</div>
+      </div>
+      <div className="col-span-2 text-right">
+        <div className="font-mono text-[9px] tracking-[0.2em] text-white/40 uppercase">Pays</div>
+        <div className="font-display text-base text-dugout-electric tabular-nums">+{profit.toFixed(1)}</div>
+      </div>
+    </div>
+  );
+}
+
+function BetModal({ ctx, bankroll, onClose, onPlace }: {
+  ctx: { marketId: string; marketName: string; optionLabel: string; oddsPct: number };
+  bankroll: number;
+  onClose: () => void;
+  onPlace: (stake: number) => void;
+}) {
+  const [stake, setStake] = useState<string>("1");
+  const num = Number(stake) || 0;
+  const valid = num > 0 && num <= bankroll;
+  const potential = num > 0 ? payoutFor(num, ctx.oddsPct) : 0;
+  const profit = potential - num;
+
+  return (
+    <div className="fixed inset-0 z-[150] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-dugout-black/80 backdrop-blur-xl" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-[2rem] p-1.5 bg-gradient-to-br from-dugout-electric/50 via-white/10 to-dugout-gold/30">
+        <div className="rounded-[calc(2rem-0.375rem)] bg-dugout-surface hairline inner-glow p-7">
+          <div className="flex items-start justify-between">
+            <div>
+              <div className="font-mono text-[10px] tracking-[0.22em] text-dugout-electric uppercase">Place demo bet</div>
+              <h2 className="mt-2 font-display text-2xl text-white leading-tight">{ctx.optionLabel}</h2>
+              <div className="font-mono text-[10px] tracking-[0.18em] text-white/45 mt-1 uppercase">on · {ctx.marketName.slice(0, 50)}{ctx.marketName.length > 50 ? "…" : ""}</div>
+            </div>
+            <button onClick={onClose} className="text-white/40 hover:text-white text-2xl leading-none">×</button>
+          </div>
+
+          <div className="mt-6 space-y-4">
+            {/* Quick amounts */}
+            <div>
+              <label className="font-mono text-[10px] tracking-[0.22em] text-white/40 uppercase">Stake (OKB)</label>
+              <div className="mt-2 grid grid-cols-4 gap-2 mb-2">
+                {[1, 5, 10, 25].map((v) => (
+                  <button key={v} onClick={() => setStake(String(v))}
+                    className={`py-2 rounded-xl font-mono text-sm transition-colors ${Number(stake) === v ? "bg-dugout-electric/20 text-dugout-electric ring-1 ring-dugout-electric/40" : "bg-white/5 text-white/65 hover:bg-white/10"}`}>
+                    {v}
+                  </button>
+                ))}
+              </div>
+              <input value={stake} onChange={(e) => setStake(e.target.value)}
+                className="w-full bg-black/30 hairline rounded-xl px-4 py-3 text-white font-mono outline-none focus:ring-1 focus:ring-dugout-electric/40" />
+              <div className="mt-1 font-mono text-[10px] tracking-[0.2em] text-white/40 uppercase text-right">
+                Bankroll: {bankroll.toFixed(1)} OKB
+              </div>
+            </div>
+
+            {/* Payout preview */}
+            <div className="rounded-xl bg-dugout-electric/10 hairline p-4">
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <div className="font-mono text-[9px] tracking-[0.2em] text-white/40 uppercase">Implied</div>
+                  <div className="font-display text-xl text-dugout-gold tabular-nums">{ctx.oddsPct}%</div>
+                </div>
+                <div>
+                  <div className="font-mono text-[9px] tracking-[0.2em] text-white/40 uppercase">If wins</div>
+                  <div className="font-display text-xl text-dugout-electric tabular-nums">{potential.toFixed(2)}</div>
+                </div>
+                <div>
+                  <div className="font-mono text-[9px] tracking-[0.2em] text-white/40 uppercase">Profit</div>
+                  <div className="font-display text-xl text-dugout-electric tabular-nums">+{profit.toFixed(2)}</div>
+                </div>
+              </div>
+            </div>
+
+            <button onClick={() => onPlace(num)} disabled={!valid}
+              className={`w-full rounded-full py-3.5 font-display text-xl tracking-wider text-dugout-black transition-transform duration-150 ease-out-strong active:scale-[0.97] ${valid ? "bg-dugout-electric hover:brightness-110 animate-hot-edge" : "bg-white/10 text-white/30 cursor-not-allowed"}`}>
+              {valid ? `PLACE ${num.toFixed(1)} OKB` : num > bankroll ? "INSUFFICIENT BANKROLL" : "ENTER STAKE"}
+            </button>
+            <div className="font-mono text-[9px] tracking-[0.22em] text-white/35 uppercase text-center">
+              ★ Demo · settles on-chain when WC 2026 kicks off
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SparkIcon() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" className="text-dugout-electric">
+      <path d="M12 3l2 6 6 2-6 2-2 6-2-6-6-2 6-2 2-6z" stroke="currentColor" strokeWidth="1.4" strokeLinejoin="round" />
+    </svg>
   );
 }
 
